@@ -442,6 +442,108 @@ async def get_user_results(user_id: str, limit: int = 10):
         return {"user_id": user_id, "results": [], "error": str(exc)}
 
 
+@app.post("/api/voice/skills-gap")
+async def skills_gap_analysis(body: dict):
+    """Analyse les resultats d'un quiz et genere un plan d'apprentissage via Claude.
+
+    Body: {"session_id": "xxx"} ou {"user_id": "xxx", "session_id": "xxx"}
+    """
+    session_id = body.get("session_id")
+    if not session_id:
+        return {"error": "session_id requis"}
+
+    # 1. Recuperer les scores depuis memoire ou Supabase
+    session_data = None
+    agent = _active_agents.get(session_id)
+    if agent:
+        session_data = agent.get_session_status()
+    else:
+        try:
+            sb = _get_supabase()
+            row = (
+                sb.table("voice_sessions")
+                .select("*")
+                .eq("session_id", session_id)
+                .single()
+                .execute()
+            )
+            session_data = row.data
+        except Exception as exc:
+            logger.error("Erreur lecture session %s: %s", session_id, exc)
+
+    if not session_data:
+        return {"error": "Session non trouvee", "session_id": session_id}
+
+    # 2. Extraire les scores par axe
+    user_id = session_data.get("user_id", body.get("user_id", "unknown"))
+    overall_score = session_data.get("overall_score") or 0
+    level = session_data.get("level") or "Novice"
+    summary = session_data.get("summary") or ""
+
+    # Construire axes_scores depuis axes_scores (Supabase) ou axes_partiels (memoire)
+    axes_scores = {}
+    raw_axes = session_data.get("axes_scores") or session_data.get("axes_partiels") or {}
+    if isinstance(raw_axes, list):
+        # Format Supabase: [{axe, score_pct, niveau, ...}, ...]
+        for ax in raw_axes:
+            axe_key = ax.get("axe", "")
+            axes_scores[axe_key] = {
+                "score_pct": ax.get("score_pct", 0),
+                "niveau": ax.get("niveau", "—"),
+            }
+    elif isinstance(raw_axes, dict):
+        # Format memoire: {label -> {score_brut_partiel, ...}}
+        key_map = {
+            "Compr. Technique IA": "comprehension_technique_ia",
+            "Comprehension Technique IA": "comprehension_technique_ia",
+            "Usage Operationnel": "usage_operationnel",
+            "Pensee Critique": "pensee_critique",
+            "Ethique & Conformite": "ethique_conformite",
+            "Collaboration Humain-IA": "collaboration_humain_ia",
+            "Collab. Humain-IA": "collaboration_humain_ia",
+            "Apprentissage Continu": "apprentissage_continu",
+        }
+        for label, data in raw_axes.items():
+            key = key_map.get(label, label)
+            if isinstance(data, dict):
+                brut = data.get("score_brut_partiel", 0)
+                pct = round((brut / 60) * 100) if brut else data.get("score_pct", 0)
+                axes_scores[key] = {"score_pct": pct, "niveau": data.get("niveau", "—")}
+
+    # 3. Appeler le SkillsGapAgent
+    try:
+        from voice.skills_gap_agent import SkillsGapAgent
+
+        gap_agent = SkillsGapAgent()
+        analysis = await gap_agent.analyze(
+            user_id=user_id,
+            axes_scores=axes_scores,
+            overall_score=overall_score,
+            level=level,
+            summary=summary,
+        )
+    except Exception as exc:
+        logger.error("Erreur skills gap analysis: %s", exc, exc_info=True)
+        return {"error": f"Erreur analyse: {exc}", "session_id": session_id}
+
+    # 4. Sauvegarder dans Supabase (dans voice_sessions.summary si pas de table dediee)
+    try:
+        sb = _get_supabase()
+        sb.table("voice_sessions").update({
+            "summary": json.dumps(analysis, ensure_ascii=False)[:10000],
+        }).eq("session_id", session_id).execute()
+        logger.info("Skills gap analysis sauvegardee — session=%s", session_id)
+    except Exception as exc:
+        logger.warning("Erreur sauvegarde skills gap: %s", exc)
+
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "user_id": user_id,
+        "analysis": analysis,
+    }
+
+
 @app.get("/health")
 async def health_check():
     """Health check — statut API + Supabase + Gemini."""

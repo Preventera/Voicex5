@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LiteraCIA — Quiz Radar Vocal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,6 +15,7 @@
     tailwind.config = {
       theme: {
         extend: {
+          fontFamily: { sans: ['"DM Sans"', 'system-ui', '-apple-system', 'sans-serif'] },
           colors: {
             ax5: { bg: '#0f172a', card: '#1e293b', accent: '#3b82f6', success: '#10b981', warn: '#f59e0b', danger: '#ef4444' }
           }
@@ -21,11 +24,17 @@
     };
   </script>
   <style>
-    @keyframes pulse-mic { 0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.5)} 50%{box-shadow:0 0 0 18px rgba(59,130,246,0)} }
-    .mic-pulse { animation: pulse-mic 1.5s ease-in-out infinite; }
+    @keyframes pulse-mic { 0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.5)} 50%{box-shadow:0 0 0 20px rgba(16,185,129,0)} }
+    .mic-pulse-green { animation: pulse-mic 1.5s ease-in-out infinite; }
+    @keyframes pulse-speak { 0%,100%{opacity:.6} 50%{opacity:1} }
+    .speak-pulse { animation: pulse-speak 1.2s ease-in-out infinite; }
     @keyframes fade-in { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
     .fade-in { animation: fade-in .4s ease-out; }
-    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; margin:0; }
+    @keyframes slide-in-badge { from{opacity:0;transform:translateY(-8px) scale(.95)} to{opacity:1;transform:translateY(0) scale(1)} }
+    .badge-anim { animation: slide-in-badge .4s ease-out; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .spin { animation: spin .8s linear infinite; }
+    body { background: #0f172a; color: #e2e8f0; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; margin:0; }
     ::-webkit-scrollbar { width:6px } ::-webkit-scrollbar-track { background:#1e293b } ::-webkit-scrollbar-thumb { background:#475569; border-radius:3px }
   </style>
 </head>
@@ -40,14 +49,39 @@
     const SAMPLE_RATE = 16000;
     const PLAYBACK_RATE = 24000;
     const AXES_ORDER = [
-      { key: "comprehension_technique_ia", label: "Compr. Technique IA" },
-      { key: "usage_operationnel", label: "Usage Operationnel" },
-      { key: "pensee_critique", label: "Pensee Critique" },
-      { key: "ethique_conformite", label: "Ethique & Conformite" },
-      { key: "collaboration_humain_ia", label: "Collab. Humain-IA" },
-      { key: "apprentissage_continu", label: "Apprentissage Continu" },
+      { key: "comprehension_technique_ia", label: "Compr. Technique IA", icon: "\u{1F9E0}" },
+      { key: "usage_operationnel", label: "Usage Operationnel", icon: "\u{1F6E0}\uFE0F" },
+      { key: "pensee_critique", label: "Pensee Critique", icon: "\u{1F50D}" },
+      { key: "ethique_conformite", label: "Ethique & Conformite", icon: "\u{1F6E1}\uFE0F" },
+      { key: "collaboration_humain_ia", label: "Collab. Humain-IA", icon: "\u{1F91D}" },
+      { key: "apprentissage_continu", label: "Apprentissage Continu", icon: "\u{1F4DA}" },
     ];
     const NIVEAUX_COLORS = { Novice:"#ef4444", Debutant:"#f59e0b", Intermediaire:"#eab308", Avance:"#3b82f6", Expert:"#10b981" };
+
+    // Questions text for display during quiz
+    const QUIZ_QUESTIONS_TEXT = {
+      CT1: "Dans tes mots, c'est quoi la difference entre une IA generative comme ChatGPT pis un systeme expert traditionnel qu'on utilise deja en SST pour l'analyse de risques?",
+      CT2: "Si je te dis qu'un modele de langage peut halluciner, qu'est-ce que ca veut dire concretement? Peux-tu me donner un exemple de risque que ca pourrait causer dans un contexte SST?",
+      CT3: "Explique-moi comment un modele d'IA apprend a partir de donnees. Pourquoi c'est important de comprendre ca quand on utilise l'IA pour analyser des rapports d'incidents CNESST?",
+      UO1: "Decris-moi une situation concrete dans ton travail en SST ou l'IA pourrait t'aider a etre plus efficace. Comment tu l'utiliserais, etape par etape?",
+      UO2: "T'as un rapport d'enquete d'accident de 40 pages a analyser pour la CNESST. Comment tu structurerais un prompt pour qu'une IA t'aide a en extraire les causes racines?",
+      UO3: "Un collegue te montre une procedure de cadenassage generee par l'IA. Quelles verifications tu ferais avant de l'approuver pour utilisation sur le plancher?",
+      PC1: "Une IA te recommande de reduire la frequence d'inspection d'un equipement critique parce que les donnees historiques montrent peu de defaillances. Es-tu d'accord? Explique ton raisonnement.",
+      PC2: "Comment tu ferais pour evaluer si une reponse donnee par l'IA sur une norme CSA ou un reglement RSST est fiable? Quels reflexes tu devrais avoir?",
+      PC3: "Un systeme IA analyse tes donnees d'accidents et conclut que 90% des incidents arrivent le lundi matin. Avant d'agir la-dessus, quelles questions tu te poserais?",
+      EC1: "Ton employeur veut utiliser l'IA pour analyser les videos de surveillance afin de detecter les comportements non securitaires. Quels enjeux ethiques tu vois la-dedans?",
+      EC2: "En lien avec la Loi 25 au Quebec, quelles precautions faut-il prendre quand on utilise l'IA pour traiter des donnees de sante et securite des travailleurs?",
+      EC3: "Si une IA de prediction de risques montre un biais — par exemple elle signale plus souvent les incidents dans un departement specifique — comment tu reagirais?",
+      CH1: "Dans un processus d'enquete d'accident, quelles etapes tu confierais a l'IA et lesquelles tu garderais absolument pour le jugement humain? Pourquoi?",
+      CH2: "Comment tu presenterais l'utilisation d'un outil IA a une equipe de travailleurs sur un chantier qui sont mefiants envers la technologie? Quelle approche tu prendrais?",
+      CH3: "Decris comment tu vois le role ideal d'un professionnel SST qui travaille avec l'IA au quotidien. Qu'est-ce qui change et qu'est-ce qui reste pareil dans son expertise?",
+      AC1: "L'IA evolue tres vite. Comment tu t'y prends concretement pour rester a jour sur les nouveaux outils IA pertinents pour la SST?",
+      AC2: "Si ta compagnie t'offrait une formation sur l'IA appliquee a la SST, qu'est-ce que tu voudrais absolument y retrouver? Quels sujets seraient prioritaires pour toi?",
+      AC3: "Raconte-moi une fois ou tu as du apprendre rapidement un nouvel outil ou une nouvelle technologie dans ton travail. Comment tu t'y es pris et qu'est-ce que t'en retires pour l'adoption de l'IA?",
+    };
+    const QUESTION_IDS = ["CT1","CT2","CT3","UO1","UO2","UO3","PC1","PC2","PC3","EC1","EC2","EC3","CH1","CH2","CH3","AC1","AC2","AC3"];
+
+    const scoreColor = (sc) => sc >= 80 ? '#10b981' : sc >= 60 ? '#3b82f6' : sc >= 40 ? '#eab308' : sc >= 20 ? '#f59e0b' : '#ef4444';
 
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -125,6 +159,11 @@
         <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>
       </svg>
     );
+    const SpeakerIcon = ({size=24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+      </svg>
+    );
     const PlayIcon = ({size=20}) => (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="6 3 20 12 6 21 6 3"/></svg>
     );
@@ -139,6 +178,17 @@
     );
     const RefreshIcon = ({size=20}) => (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+    );
+    const BrainIcon = ({size=20}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2a5 5 0 0 1 5 5c0 1.1-.4 2.1-1 2.9l.5.1a4 4 0 0 1 .3 7.9L12 18"/><path d="M12 2a5 5 0 0 0-5 5c0 1.1.4 2.1 1 2.9l-.5.1A4 4 0 0 0 7.2 18L12 18"/><path d="M12 18v4"/>
+      </svg>
+    );
+    const SpinnerIcon = ({size=20}) => (
+      <svg className="spin" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 2v4"/><path d="M12 18v4" opacity=".3"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83" opacity=".3"/>
+        <path d="M2 12h4"/><path d="M18 12h4" opacity=".3"/><path d="M4.93 19.07l2.83-2.83" opacity=".5"/><path d="M16.24 7.76l2.83-2.83" opacity=".5"/>
+      </svg>
     );
 
     // ============================================================
@@ -196,13 +246,29 @@
         <div className="min-h-screen flex items-center justify-center p-4">
           <div className="max-w-lg w-full fade-in">
             {/* Logo */}
-            <div className="text-center mb-8">
+            <div className="text-center mb-6">
               <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-ax5-accent/20 mb-4">
                 <MicIcon size={40}/>
               </div>
               <h1 className="text-3xl font-bold mb-1">LiteraCIA</h1>
               <p className="text-ax5-accent text-lg font-medium">Quiz Radar Vocal</p>
-              <p className="text-slate-400 text-sm mt-2">18 questions ouvertes — ~15 minutes — Evaluation IA en temps reel</p>
+              <p className="text-slate-400 text-sm mt-3 leading-relaxed max-w-md mx-auto">
+                Evaluez votre niveau de litteratie IA en sante-securite au travail grace a un entretien vocal avec l'IA
+              </p>
+            </div>
+
+            {/* 6 Axes Preview */}
+            <div className="bg-ax5-card rounded-2xl p-4 border border-slate-700 mb-4">
+              <p className="text-xs text-slate-500 uppercase tracking-wider mb-3 text-center">6 axes evalues</p>
+              <div className="grid grid-cols-2 gap-2">
+                {AXES_ORDER.map(a => (
+                  <div key={a.key} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ax5-bg/50">
+                    <span className="text-base">{a.icon}</span>
+                    <span className="text-xs text-slate-300">{a.label}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 text-center mt-3">Duree : ~15 minutes — 18 questions ouvertes</p>
             </div>
 
             {/* Form */}
@@ -243,59 +309,88 @@
     }
 
     // ============================================================
+    // SCORE BADGE (animated notification)
+    // ============================================================
+    function ScoreBadge({ questionNum, visible }) {
+      if (!visible || questionNum <= 0) return null;
+      return (
+        <div className="badge-anim flex items-center gap-2 bg-ax5-success/15 border border-ax5-success/30 text-ax5-success px-4 py-2 rounded-lg text-sm font-medium">
+          <CheckCircleIcon size={16}/>
+          <span>Question {questionNum} scoree</span>
+        </div>
+      );
+    }
+
+    // ============================================================
     // QUIZ SCREEN
     // ============================================================
-    function QuizScreen({ sessionId, transcripts, questionNum, currentAxe, elapsed, isGeminiSpeaking, isPaused, onPause, onStop }) {
+    function QuizScreen({ sessionId, transcripts, questionNum, currentAxe, currentQuestionId, elapsed, isGeminiSpeaking, isPaused, scoreBadgeVisible, onPause, onStop }) {
       const bottomRef = useRef(null);
       useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:'smooth' }); }, [transcripts]);
 
       const pct = Math.round((questionNum / 18) * 100);
+      const nextQIdx = Math.min(questionNum, 17);
+      const nextQId = QUESTION_IDS[nextQIdx];
+      const questionText = QUIZ_QUESTIONS_TEXT[currentQuestionId || nextQId] || "";
 
       return (
         <div className="min-h-screen flex flex-col p-4 max-w-2xl mx-auto fade-in">
           {/* Header */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3">
             <div>
               <h2 className="text-lg font-semibold">Quiz Radar Vocal</h2>
               <p className="text-xs text-slate-500">Session: {sessionId?.substring(0,8)}...</p>
             </div>
             <div className="text-right">
-              <p className="text-sm font-mono text-slate-300">{fmtTime(elapsed)} / ~20:00</p>
+              <p className="text-sm font-mono text-slate-300">{fmtTime(elapsed)}</p>
             </div>
           </div>
 
           {/* Progress */}
-          <div className="mb-4">
+          <div className="mb-3">
             <div className="flex justify-between text-sm mb-1">
-              <span className="text-slate-400">Question {Math.min(questionNum + 1, 18)}/18</span>
-              <span className="text-ax5-accent">{currentAxe}</span>
+              <span className="text-slate-400 font-medium">Question {Math.min(questionNum + 1, 18)}/18</span>
+              <span className="text-ax5-accent font-medium">{currentAxe}</span>
             </div>
             <div className="h-2 bg-ax5-bg rounded-full overflow-hidden">
               <div className="h-full bg-ax5-accent rounded-full transition-all duration-500" style={{width:`${pct}%`}}/>
             </div>
           </div>
 
+          {/* Score badge */}
+          <div className="flex justify-center mb-2" style={{minHeight: 36}}>
+            <ScoreBadge questionNum={questionNum} visible={scoreBadgeVisible} />
+          </div>
+
+          {/* Current question text */}
+          {questionText && (
+            <div className="bg-ax5-bg/50 border border-slate-700/50 rounded-xl px-4 py-3 mb-3">
+              <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Question en cours</p>
+              <p className="text-sm text-slate-300 leading-relaxed">{questionText}</p>
+            </div>
+          )}
+
           {/* Mic indicator */}
-          <div className="flex justify-center my-6">
+          <div className="flex justify-center my-4">
             <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${
               isGeminiSpeaking
-                ? 'bg-ax5-success/20 text-ax5-success'
+                ? 'bg-slate-700/60 text-slate-400 speak-pulse'
                 : isPaused
-                  ? 'bg-slate-700 text-slate-400'
-                  : 'bg-ax5-accent/20 text-ax5-accent mic-pulse'
+                  ? 'bg-slate-700 text-slate-500'
+                  : 'bg-ax5-success/20 text-ax5-success mic-pulse-green'
             }`}>
-              <MicIcon size={36}/>
+              {isGeminiSpeaking ? <SpeakerIcon size={36}/> : <MicIcon size={36}/>}
             </div>
           </div>
-          <p className="text-center text-sm mb-4 text-slate-400">
-            {isGeminiSpeaking ? "Gemini parle..." : isPaused ? "En pause" : "A vous de parler..."}
+          <p className="text-center text-sm mb-3 font-medium" style={{color: isGeminiSpeaking ? '#94a3b8' : isPaused ? '#64748b' : '#10b981'}}>
+            {isGeminiSpeaking ? "L'assistant parle..." : isPaused ? "En pause" : "A vous de parler..."}
           </p>
 
           {/* Transcript */}
-          <div className="flex-1 bg-ax5-card rounded-xl border border-slate-700 p-4 overflow-y-auto mb-4" style={{maxHeight:'320px',minHeight:'180px'}}>
+          <div className="flex-1 bg-ax5-card rounded-xl border border-slate-700 p-4 overflow-y-auto mb-4" style={{maxHeight:'280px',minHeight:'160px'}}>
             {transcripts.length === 0 && <p className="text-slate-500 text-sm italic">L'assistant va vous accueillir...</p>}
             {transcripts.map((t, i) => (
-              <div key={i} className={`mb-3 text-sm ${t.role === 'gemini' ? 'text-slate-200' : 'text-ax5-accent'}`}>
+              <div key={i} className={`mb-3 text-sm ${t.role === 'gemini' ? 'text-slate-200' : 'text-ax5-success'}`}>
                 <span className="text-xs text-slate-500 mr-2">{t.role === 'gemini' ? 'Assistant' : 'Vous'}</span>
                 <span>{t.text}</span>
               </div>
@@ -378,11 +473,15 @@
       return React.createElement('canvas', { ref: canvasRef });
     }
 
-    function ResultsScreen({ result, onRestart }) {
+    function ResultsScreen({ result, sessionId, onRestart }) {
+      const [analyzing, setAnalyzing] = useState(false);
+      const [analysisResult, setAnalysisResult] = useState(null);
+      const [analysisError, setAnalysisError] = useState(null);
+
       if (!result) return null;
 
       const { overall_score, level, axes, feedback, points_forts, axes_a_developper } = result;
-      const color = NIVEAUX_COLORS[level] || "#3b82f6";
+      const globalColor = scoreColor(overall_score);
 
       // Radar data
       const radarData = AXES_ORDER.map(a => ({
@@ -390,9 +489,32 @@
         score: axes?.[a.key]?.score_pct ?? 0,
       }));
 
+      // Derive forces/dev from axes data
+      const forces = AXES_ORDER.filter(a => (axes?.[a.key]?.score_pct ?? 0) >= 60);
+      const aDevelopper = AXES_ORDER.filter(a => (axes?.[a.key]?.score_pct ?? 0) < 60 && (axes?.[a.key]?.score_pct ?? 0) > 0);
+
+      const handleAnalyze = async () => {
+        setAnalyzing(true);
+        setAnalysisError(null);
+        try {
+          const resp = await fetch("http://localhost:8003/api/voice/skills-gap", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          setAnalysisResult(data);
+        } catch (e) {
+          setAnalysisError("Erreur lors de l'analyse: " + e.message);
+        } finally {
+          setAnalyzing(false);
+        }
+      };
+
       return (
         <div className="min-h-screen flex items-center justify-center p-4">
-          <div className="max-w-2xl w-full fade-in space-y-6">
+          <div className="max-w-2xl w-full fade-in space-y-5 py-8">
             {/* Header */}
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-1">Resultats du Quiz</h2>
@@ -401,8 +523,8 @@
 
             {/* Score global */}
             <div className="bg-ax5-card rounded-2xl p-6 border border-slate-700 text-center">
-              <p className="text-5xl font-bold mb-1" style={{color}}>{Math.round(overall_score)}%</p>
-              <p className="text-xl font-semibold" style={{color}}>{level}</p>
+              <p className="text-6xl font-bold mb-2" style={{color: globalColor}}>{Math.round(overall_score)}%</p>
+              <p className="text-xl font-semibold" style={{color: globalColor}}>{level}</p>
             </div>
 
             {/* Radar */}
@@ -413,20 +535,22 @@
               </div>
             </div>
 
-            {/* Axes detail */}
+            {/* Axes detail bars */}
             <div className="bg-ax5-card rounded-2xl p-6 border border-slate-700 space-y-3">
               <h3 className="text-sm text-slate-400 mb-2">Detail par axe</h3>
               {AXES_ORDER.map(a => {
                 const sc = axes?.[a.key]?.score_pct ?? 0;
-                const niv = axes?.[a.key]?.niveau ?? "—";
-                const barColor = sc >= 80 ? '#10b981' : sc >= 60 ? '#3b82f6' : sc >= 40 ? '#eab308' : sc >= 20 ? '#f59e0b' : '#ef4444';
+                const niv = axes?.[a.key]?.niveau ?? "\u2014";
+                const barColor = scoreColor(sc);
                 return (
                   <div key={a.key}>
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-300">{a.label}</span>
-                      <span style={{color:barColor}} className="font-medium">{Math.round(sc)}% — {niv}</span>
+                      <span className="text-slate-300 flex items-center gap-2">
+                        <span>{a.icon}</span> {a.label}
+                      </span>
+                      <span style={{color:barColor}} className="font-semibold">{Math.round(sc)}% <span className="font-normal text-xs text-slate-500">({niv})</span></span>
                     </div>
-                    <div className="h-2 bg-ax5-bg rounded-full overflow-hidden">
+                    <div className="h-2.5 bg-ax5-bg rounded-full overflow-hidden">
                       <div className="h-full rounded-full transition-all duration-700" style={{width:`${sc}%`, background:barColor}}/>
                     </div>
                   </div>
@@ -434,44 +558,70 @@
               })}
             </div>
 
-            {/* Feedback */}
+            {/* Resume / Feedback */}
             {feedback && (
               <div className="bg-ax5-card rounded-2xl p-6 border border-slate-700">
-                <h3 className="text-sm text-slate-400 mb-2">Debrief de l'assistant</h3>
+                <h3 className="text-sm text-slate-400 mb-2">Resume de l'assistant</h3>
                 <p className="text-slate-200 text-sm leading-relaxed">{feedback}</p>
               </div>
             )}
 
-            {/* Points forts / a developper */}
+            {/* Forces + A developper (derived from axes) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {points_forts?.length > 0 && (
+              {forces.length > 0 && (
                 <div className="bg-ax5-card rounded-xl p-4 border border-green-900/50">
-                  <h4 className="text-ax5-success text-sm font-medium mb-2">Points forts</h4>
-                  <ul className="text-sm text-slate-300 space-y-1">
-                    {points_forts.map((p,i) => <li key={i} className="flex items-start gap-1.5"><span className="text-ax5-success mt-0.5">+</span>{p}</li>)}
+                  <h4 className="text-ax5-success text-sm font-semibold mb-2">Vos forces</h4>
+                  <ul className="text-sm text-slate-300 space-y-1.5">
+                    {forces.map(a => (
+                      <li key={a.key} className="flex items-center gap-2">
+                        <span className="text-ax5-success">+</span>
+                        <span>{a.icon} {a.label} ({Math.round(axes?.[a.key]?.score_pct ?? 0)}%)</span>
+                      </li>
+                    ))}
                   </ul>
                 </div>
               )}
-              {axes_a_developper?.length > 0 && (
+              {aDevelopper.length > 0 && (
                 <div className="bg-ax5-card rounded-xl p-4 border border-yellow-900/50">
-                  <h4 className="text-ax5-warn text-sm font-medium mb-2">A developper</h4>
-                  <ul className="text-sm text-slate-300 space-y-1">
-                    {axes_a_developper.map((a,i) => <li key={i} className="flex items-start gap-1.5"><span className="text-ax5-warn mt-0.5">-</span>{a}</li>)}
+                  <h4 className="text-ax5-warn text-sm font-semibold mb-2">Axes a developper</h4>
+                  <ul className="text-sm text-slate-300 space-y-1.5">
+                    {aDevelopper.map(a => (
+                      <li key={a.key} className="flex items-center gap-2">
+                        <span className="text-ax5-warn">\u2192</span>
+                        <span>{a.icon} {a.label} ({Math.round(axes?.[a.key]?.score_pct ?? 0)}%)</span>
+                      </li>
+                    ))}
                   </ul>
                 </div>
               )}
             </div>
 
+            {/* Analysis result */}
+            {analysisResult && (
+              <div className="bg-ax5-card rounded-2xl p-6 border border-ax5-accent/30 fade-in">
+                <h3 className="text-ax5-accent text-sm font-semibold mb-2">Analyse approfondie par Claude</h3>
+                <p className="text-slate-200 text-sm leading-relaxed whitespace-pre-line">{analysisResult.analysis || JSON.stringify(analysisResult, null, 2)}</p>
+              </div>
+            )}
+            {analysisError && (
+              <div className="bg-red-900/20 border border-red-800/50 rounded-xl p-4 text-red-300 text-sm fade-in">
+                {analysisError}
+              </div>
+            )}
+
             {/* Actions */}
-            <div className="flex gap-3">
-              <button onClick={onRestart}
-                className="flex-1 py-3 rounded-lg bg-ax5-accent text-white font-semibold hover:bg-blue-600 transition flex items-center justify-center gap-2">
-                <RefreshIcon/> Refaire le quiz
+            <div className="space-y-3">
+              <button onClick={handleAnalyze} disabled={analyzing}
+                className="w-full py-3.5 rounded-lg bg-ax5-accent text-white font-semibold hover:bg-blue-600 disabled:opacity-60 transition flex items-center justify-center gap-2">
+                {analyzing
+                  ? <><SpinnerIcon size={20}/> Analyse en cours par Claude...</>
+                  : <><BrainIcon size={20}/> Analyser mes resultats en profondeur</>
+                }
               </button>
-              <a href="http://localhost:5000" target="_blank" rel="noopener"
-                className="flex-1 py-3 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-700 transition flex items-center justify-center gap-2 text-sm text-center">
-                Voir analyse detaillee (LiteraCIA)
-              </a>
+              <button onClick={onRestart}
+                className="w-full py-3 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-700 transition flex items-center justify-center gap-2 text-sm">
+                <RefreshIcon size={18}/> Refaire le quiz
+              </button>
             </div>
           </div>
         </div>
@@ -487,15 +637,18 @@
       const [transcripts, setTranscripts] = useState([]);
       const [questionNum, setQuestionNum] = useState(0);
       const [currentAxe, setCurrentAxe] = useState("Comprehension Technique IA");
+      const [currentQuestionId, setCurrentQuestionId] = useState(null);
       const [elapsed, setElapsed] = useState(0);
       const [isGeminiSpeaking, setIsGeminiSpeaking] = useState(false);
       const [isPaused, setIsPaused] = useState(false);
       const [result, setResult] = useState(null);
       const [error, setError] = useState(null);
+      const [scoreBadgeVisible, setScoreBadgeVisible] = useState(false);
 
       const wsRef = useRef(null);
       const audioRef = useRef(null);
       const timerRef = useRef(null);
+      const badgeTimerRef = useRef(null);
 
       // Timer
       useEffect(() => {
@@ -514,6 +667,13 @@
         if (wsRef.current) { try { wsRef.current.close(); } catch(e){} wsRef.current = null; }
         if (audioRef.current) { audioRef.current.stop(); audioRef.current = null; }
         clearInterval(timerRef.current);
+        clearTimeout(badgeTimerRef.current);
+      }, []);
+
+      const showScoreBadge = useCallback(() => {
+        setScoreBadgeVisible(true);
+        clearTimeout(badgeTimerRef.current);
+        badgeTimerRef.current = setTimeout(() => setScoreBadgeVisible(false), 2500);
       }, []);
 
       // ---- START QUIZ ----
@@ -525,6 +685,8 @@
         setResult(null);
         setIsGeminiSpeaking(false);
         setIsPaused(false);
+        setCurrentQuestionId(null);
+        setScoreBadgeVisible(false);
 
         try {
           // WebSocket
@@ -614,7 +776,9 @@
               const qNum = msg.result.question_number || 0;
               setQuestionNum(qNum);
               const qId = msg.result.question_id || "";
+              setCurrentQuestionId(qId);
               setCurrentAxe(axeLabelFromId(qId));
+              showScoreBadge();
               // Remove the "(ecoute...)" placeholder if present
               setTranscripts(prev => {
                 if (prev.length > 0 && prev[prev.length-1].text === '(ecoute...)') {
@@ -638,17 +802,15 @@
       }, []);
 
       const handleQuizCompleted = useCallback((finalResult) => {
-        // Build result object for display
-        // We need axes data — fetch from session status or build from finalResult
         const fetchResults = async () => {
           try {
             const resp = await fetch(`http://localhost:8003/api/voice/sessions/${sessionId}`);
             const data = await resp.json();
             setResult({
               overall_score: finalResult.overall_score ?? data.score_global_pct ?? 0,
-              level: finalResult.level ?? data.niveau_global ?? "—",
+              level: finalResult.level ?? data.niveau_global ?? "\u2014",
               axes: buildAxesMap(data.axes_partiels || {}),
-              feedback: data.participant_feedback || "",
+              feedback: data.summary || data.participant_feedback || "",
               points_forts: data.points_forts || [],
               axes_a_developper: data.axes_a_developper || [],
             });
@@ -656,7 +818,7 @@
             // Fallback: use what we have
             setResult({
               overall_score: finalResult.overall_score ?? 0,
-              level: finalResult.level ?? "—",
+              level: finalResult.level ?? "\u2014",
               axes: {},
               feedback: "",
               points_forts: [],
@@ -670,7 +832,6 @@
       }, [sessionId, cleanup]);
 
       const buildAxesMap = (partiels) => {
-        // Convert partial axes from session status to display format
         const map = {};
         const keyMap = {
           "Compr. Technique IA":"comprehension_technique_ia",
@@ -728,14 +889,16 @@
               transcripts={transcripts}
               questionNum={questionNum}
               currentAxe={currentAxe}
+              currentQuestionId={currentQuestionId}
               elapsed={elapsed}
               isGeminiSpeaking={isGeminiSpeaking}
               isPaused={isPaused}
+              scoreBadgeVisible={scoreBadgeVisible}
               onPause={handlePause}
               onStop={handleStop}
             />
           )}
-          {screen === "results" && <ResultsScreen result={result} onRestart={handleRestart} />}
+          {screen === "results" && <ResultsScreen result={result} sessionId={sessionId} onRestart={handleRestart} />}
         </div>
       );
     }
