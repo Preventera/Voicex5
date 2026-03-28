@@ -284,9 +284,8 @@ class VoiceQuizAgent:
                 "axes_scores": axes_json,
                 "overall_score": result.score_global_pct,
                 "level": result.niveau_global.value,
-                "participant_feedback": result.participant_feedback,
-                "points_forts": result.points_forts,
-                "axes_a_developper": result.axes_a_developper,
+                "summary": result.participant_feedback,
+                "questions_answered": self.questions_answered,
                 "duration_seconds": result.duree_secondes,
                 "completed_at": now_iso,
             }).eq("session_id", self.session_id).execute()
@@ -350,7 +349,6 @@ class VoiceQuizAgent:
                 "status": "active",
                 "questions_answered": 0,
                 "question_scores": [],
-                "created_at": datetime.now(timezone.utc).isoformat(),
             }).execute()
 
             logger.debug("voice_sessions cree — session=%s", self.session_id)
@@ -395,7 +393,62 @@ class VoiceQuizAgent:
             )
 
     # ----------------------------------------------------------
-    # 6. get_session_status
+    # 6. save_partial_results (connexion tombee apres Q12+)
+    # ----------------------------------------------------------
+
+    MIN_QUESTIONS_FOR_PARTIAL = 12
+
+    async def save_partial_results(self) -> Optional[QuizVocalResult]:
+        """Sauvegarde les resultats partiels si assez de questions repondues.
+
+        Appele quand la connexion Gemini tombe en cours de quiz.
+        Calcule les scores uniquement sur les axes avec 3 questions completes.
+        """
+        if self.questions_answered < self.MIN_QUESTIONS_FOR_PARTIAL:
+            logger.info(
+                "Seulement %d questions — pas assez pour resultats partiels",
+                self.questions_answered,
+            )
+            return None
+
+        self.result = self._calculate_results(
+            feedback=(
+                f"Quiz interrompu apres {self.questions_answered}/18 questions. "
+                f"Resultats partiels calcules sur les axes completes."
+            ),
+            points_forts=[],
+            axes_a_developper=[],
+        )
+
+        # Marquer les axes incomplets
+        for sa in self.result.scores_axes:
+            if len(sa.questions) < 3:
+                sa.niveau = calcul_niveau(0)
+                sa.score_pct = 0.0
+                sa.score_brut = 0
+
+        # Recalculer le global sur les axes complets uniquement
+        axes_complets = [sa for sa in self.result.scores_axes if len(sa.questions) == 3]
+        if axes_complets:
+            self.result.score_global_pct = round(
+                sum(a.score_pct for a in axes_complets) / len(axes_complets), 1
+            )
+            self.result.niveau_global = calcul_niveau(self.result.score_global_pct)
+
+        await self._save_to_supabase(self.result)
+
+        logger.info(
+            "Resultats partiels sauvegardes — session=%s questions=%d/18 "
+            "axes_complets=%d/6 score=%.1f%%",
+            self.session_id,
+            self.questions_answered,
+            len(axes_complets),
+            self.result.score_global_pct,
+        )
+        return self.result
+
+    # ----------------------------------------------------------
+    # 7. get_session_status
     # ----------------------------------------------------------
 
     def get_session_status(self) -> dict:

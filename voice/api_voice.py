@@ -214,6 +214,12 @@ async def ws_voice_quiz(websocket: WebSocket):
         if agent and not agent.result:
             await _mark_abandoned(agent)
 
+    except ConnectionError as exc:
+        logger.warning("Connexion Gemini perdue — session=%s: %s", session_id, exc)
+        if agent and not agent.result:
+            await _mark_abandoned(agent)
+        await _ws_send_error(websocket, f"Connexion Gemini perdue: {exc}")
+
     except asyncio.TimeoutError:
         logger.warning("WS timeout init — pas de message user_id recu")
         await _ws_send_error(websocket, "Timeout: message init attendu dans 30s")
@@ -221,10 +227,6 @@ async def ws_voice_quiz(websocket: WebSocket):
     except json.JSONDecodeError as exc:
         logger.warning("WS JSON invalide init: %s", exc)
         await _ws_send_error(websocket, f"JSON invalide: {exc}")
-
-    except ConnectionError as exc:
-        logger.error("Erreur connexion Gemini: %s", exc)
-        await _ws_send_error(websocket, f"Erreur Gemini: {exc}")
 
     except Exception as exc:
         logger.error("Erreur WS inattendue: %s", exc, exc_info=True)
@@ -323,7 +325,27 @@ async def _run_bidirectional_loop(
 
 
 async def _mark_abandoned(agent: VoiceQuizAgent) -> None:
-    """Marque une session comme abandonnee dans Supabase."""
+    """Marque une session comme abandonnee ou sauvegarde les resultats partiels."""
+    # Si 12+ questions, sauvegarder comme completed_partial
+    if agent.questions_answered >= agent.MIN_QUESTIONS_FOR_PARTIAL:
+        try:
+            result = await agent.save_partial_results()
+            if result:
+                sb = _get_supabase()
+                sb.table("voice_sessions").update({
+                    "status": "completed_partial",
+                }).eq("session_id", agent.session_id).execute()
+                logger.info(
+                    "Session sauvegardee partielle — %s (%d/18 questions, score=%.1f%%)",
+                    agent.session_id,
+                    agent.questions_answered,
+                    result.score_global_pct,
+                )
+                return
+        except Exception as exc:
+            logger.error("Erreur sauvegarde partielle: %s", exc)
+
+    # Sinon marquer comme abandonnee
     try:
         sb = _get_supabase()
         sb.table("voice_sessions").update({

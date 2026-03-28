@@ -25,6 +25,7 @@ from voice.voice_config import (
     GEMINI_API_KEY,
     GEMINI_GENERATION_CONFIG,
     GEMINI_MODEL,
+    GEMINI_REALTIME_INPUT_CONFIG,
     GEMINI_TOOLS,
     GEMINI_WS_URI,
     SYSTEM_PROMPT,
@@ -90,6 +91,8 @@ class GeminiLiveService:
         await service.close_session()
     """
 
+    KEEPALIVE_INTERVAL_S = 15.0  # Ping toutes les 15s pour eviter timeout Gemini
+
     def __init__(self) -> None:
         self._ws: Optional[ClientConnection] = None
         self._session_id: Optional[str] = None
@@ -97,6 +100,7 @@ class GeminiLiveService:
         self._system_prompt: str = SYSTEM_PROMPT
         self._tools: list[dict] = GEMINI_TOOLS
         self._reconnect_attempts: int = 0
+        self._keepalive_task: Optional[asyncio.Task] = None
 
     # ----------------------------------------------------------
     # Proprietes
@@ -164,6 +168,7 @@ class GeminiLiveService:
                 await self._send_setup_message()
                 self._connected = True
                 self._reconnect_attempts = 0
+                self._start_keepalive()
                 logger.info("Connexion Gemini Live etablie (tentative %d)", attempt + 1)
                 return
             except (
@@ -198,6 +203,7 @@ class GeminiLiveService:
                     "parts": [{"text": self._system_prompt}],
                 },
                 "tools": self._tools,
+                "realtimeInputConfig": GEMINI_REALTIME_INPUT_CONFIG,
             }
         }
         await self._send_json(setup_msg)
@@ -381,12 +387,53 @@ class GeminiLiveService:
         )
 
     # ----------------------------------------------------------
+    # 4b. Keepalive
+    # ----------------------------------------------------------
+
+    def _start_keepalive(self) -> None:
+        """Demarre la boucle keepalive en background."""
+        self._stop_keepalive()
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+    def _stop_keepalive(self) -> None:
+        """Arrete la boucle keepalive."""
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
+
+    async def _keepalive_loop(self) -> None:
+        """Envoie un micro audio chunk silence toutes les 15s."""
+        # 160 samples de silence @ 16kHz = 10ms — assez petit pour ne pas interferer
+        silence = base64.b64encode(b"\x00" * 320).decode("ascii")
+        while self._connected:
+            try:
+                await asyncio.sleep(self.KEEPALIVE_INTERVAL_S)
+                if not self.is_connected:
+                    break
+                msg = {
+                    "realtime_input": {
+                        "audio": {
+                            "data": silence,
+                            "mime_type": f"audio/pcm;rate={AUDIO_INPUT_SAMPLE_RATE}",
+                        }
+                    }
+                }
+                await self._send_json(msg)
+                logger.debug("Keepalive envoye — session %s", self._session_id)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("Keepalive erreur: %s", exc)
+                break
+
+    # ----------------------------------------------------------
     # 5. close_session
     # ----------------------------------------------------------
 
     async def close_session(self) -> None:
         """Ferme proprement le WebSocket Gemini."""
         self._connected = False
+        self._stop_keepalive()
         if self._ws is not None:
             try:
                 await asyncio.wait_for(

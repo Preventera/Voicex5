@@ -45,6 +45,13 @@ GEMINI_GENERATION_CONFIG = {
     },
 }
 
+# Config VAD pour turn-taking correct
+GEMINI_REALTIME_INPUT_CONFIG = {
+    "automaticActivityDetection": {
+        "disabled": False,
+    },
+}
+
 
 # ============================================================
 # 2. LES 6 AXES DU RADAR + 18 QUESTIONS (3 × 6)
@@ -292,6 +299,13 @@ REGLES :
 - Si la personne dit "je sais pas", encourage-la a essayer puis score selon ce qu'elle donne.
 - Adapte ton debit : laisse le temps de reflechir, ne coupe pas la parole.
 - Reste dans le contexte SST/HSE Quebec (CNESST, RSST, Loi 25, normes CSA).
+
+IMPORTANT — TURN-TAKING :
+- Apres chaque question, ARRETE de parler et ATTENDS la reponse vocale du participant.
+- Ne pose la question suivante que APRES avoir recu et score la reponse precedente.
+- Fais une pause claire entre chaque question. Ne parle pas en continu.
+- Tes reponses doivent etre COURTES : une transition d'une phrase puis la question suivante.
+- N'ajoute PAS de commentaires ou d'explications apres avoir pose la question.
 """
 
 
