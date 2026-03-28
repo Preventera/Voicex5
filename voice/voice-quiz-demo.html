@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="fr-CA">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiteraCIA — Quiz Radar Vocal</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ax5: { bg: '#0f172a', card: '#1e293b', accent: '#3b82f6', success: '#10b981', warn: '#f59e0b', danger: '#ef4444' }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    @keyframes pulse-mic { 0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.5)} 50%{box-shadow:0 0 0 18px rgba(59,130,246,0)} }
+    .mic-pulse { animation: pulse-mic 1.5s ease-in-out infinite; }
+    @keyframes fade-in { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+    .fade-in { animation: fade-in .4s ease-out; }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; margin:0; }
+    ::-webkit-scrollbar { width:6px } ::-webkit-scrollbar-track { background:#1e293b } ::-webkit-scrollbar-thumb { background:#475569; border-radius:3px }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    // ============================================================
+    // CONFIG
+    // ============================================================
+    const WS_URL = "ws://localhost:8003/ws/voice/quiz";
+    const SAMPLE_RATE = 16000;
+    const PLAYBACK_RATE = 24000;
+    const AXES_ORDER = [
+      { key: "comprehension_technique_ia", label: "Compr. Technique IA" },
+      { key: "usage_operationnel", label: "Usage Operationnel" },
+      { key: "pensee_critique", label: "Pensee Critique" },
+      { key: "ethique_conformite", label: "Ethique & Conformite" },
+      { key: "collaboration_humain_ia", label: "Collab. Humain-IA" },
+      { key: "apprentissage_continu", label: "Apprentissage Continu" },
+    ];
+    const NIVEAUX_COLORS = { Novice:"#ef4444", Debutant:"#f59e0b", Intermediaire:"#eab308", Avance:"#3b82f6", Expert:"#10b981" };
+
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ============================================================
+    // AUDIO ENGINE
+    // ============================================================
+    class AudioEngine {
+      constructor(onChunk) {
+        this.onChunk = onChunk;
+        this.stream = null;
+        this.audioCtx = null;
+        this.sourceNode = null;
+        this.processorNode = null;
+        this.playbackCtx = null;
+        this.playbackQueue = [];
+        this.isPlaying = false;
+      }
+
+      async startCapture() {
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          audio: { sampleRate: SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+        this.audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+        this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream);
+        this.processorNode = this.audioCtx.createScriptProcessor(4096, 1, 1);
+        this.processorNode.onaudioprocess = (e) => {
+          const float32 = e.inputBuffer.getChannelData(0);
+          const pcm16 = new Int16Array(float32.length);
+          for (let i = 0; i < float32.length; i++) {
+            const s = Math.max(-1, Math.min(1, float32[i]));
+            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+          this.onChunk(pcm16.buffer);
+        };
+        this.sourceNode.connect(this.processorNode);
+        this.processorNode.connect(this.audioCtx.destination);
+      }
+
+      enqueuePlayback(pcm16ArrayBuffer) {
+        this.playbackQueue.push(pcm16ArrayBuffer);
+        if (!this.isPlaying) this._playNext();
+      }
+
+      async _playNext() {
+        if (this.playbackQueue.length === 0) { this.isPlaying = false; return; }
+        this.isPlaying = true;
+        if (!this.playbackCtx) this.playbackCtx = new AudioContext({ sampleRate: PLAYBACK_RATE });
+        const raw = this.playbackQueue.shift();
+        const int16 = new Int16Array(raw);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x8000;
+        const buf = this.playbackCtx.createBuffer(1, float32.length, PLAYBACK_RATE);
+        buf.getChannelData(0).set(float32);
+        const src = this.playbackCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(this.playbackCtx.destination);
+        src.onended = () => this._playNext();
+        src.start();
+      }
+
+      stop() {
+        if (this.processorNode) { this.processorNode.disconnect(); this.processorNode = null; }
+        if (this.sourceNode) { this.sourceNode.disconnect(); this.sourceNode = null; }
+        if (this.audioCtx) { this.audioCtx.close(); this.audioCtx = null; }
+        if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+        this.playbackQueue = [];
+      }
+    }
+
+    // ============================================================
+    // ICON COMPONENTS
+    // ============================================================
+    const MicIcon = ({size=24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>
+      </svg>
+    );
+    const PlayIcon = ({size=20}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+    );
+    const PauseIcon = ({size=20}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+    );
+    const CheckCircleIcon = ({size=20}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+    );
+    const ShieldIcon = ({size=20}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    );
+    const RefreshIcon = ({size=20}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+    );
+
+    // ============================================================
+    // FORMAT HELPERS
+    // ============================================================
+    const fmtTime = (s) => { const m=Math.floor(s/60); return `${String(m).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; };
+    const axeLabelFromId = (qid) => {
+      const map = {CT:"Compr. Technique IA",UO:"Usage Operationnel",PC:"Pensee Critique",EC:"Ethique & Conformite",CH:"Collab. Humain-IA",AC:"Apprentissage Continu"};
+      return map[qid?.substring(0,2)] || "";
+    };
+
+    // ============================================================
+    // CONSENT MODAL
+    // ============================================================
+    function ConsentModal({ onAccept, onDecline }) {
+      return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 fade-in">
+          <div className="bg-ax5-card rounded-2xl p-6 max-w-md w-full border border-slate-600 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-ax5-accent/20 rounded-full"><ShieldIcon size={24}/></div>
+              <h3 className="text-lg font-semibold">Consentement — Loi 25</h3>
+            </div>
+            <p className="text-slate-300 text-sm leading-relaxed mb-4">
+              Vos reponses vocales seront traitees par IA (Gemini Live de Google) pour evaluer votre niveau de litteratie IA.
+            </p>
+            <ul className="text-sm text-slate-400 space-y-2 mb-6">
+              <li className="flex items-start gap-2"><CheckCircleIcon size={16}/><span>L'audio n'est <strong className="text-white">PAS enregistre</strong></span></li>
+              <li className="flex items-start gap-2"><CheckCircleIcon size={16}/><span>Seules les transcriptions et scores sont conserves</span></li>
+              <li className="flex items-start gap-2"><CheckCircleIcon size={16}/><span>Vous pouvez arreter le quiz a tout moment</span></li>
+              <li className="flex items-start gap-2"><CheckCircleIcon size={16}/><span>Donnees hebergees au Canada (Supabase)</span></li>
+            </ul>
+            <div className="flex gap-3">
+              <button onClick={onDecline} className="flex-1 py-2.5 rounded-lg border border-slate-500 text-slate-300 hover:bg-slate-700 transition text-sm">Refuser</button>
+              <button onClick={onAccept} className="flex-1 py-2.5 rounded-lg bg-ax5-accent text-white font-medium hover:bg-blue-600 transition text-sm">J'accepte</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // WELCOME SCREEN
+    // ============================================================
+    function WelcomeScreen({ onStart }) {
+      const [userId, setUserId] = useState("");
+      const [language, setLanguage] = useState("fr-CA");
+      const [showConsent, setShowConsent] = useState(false);
+
+      const handleStart = () => {
+        if (!userId.trim()) return;
+        setShowConsent(true);
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="max-w-lg w-full fade-in">
+            {/* Logo */}
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-ax5-accent/20 mb-4">
+                <MicIcon size={40}/>
+              </div>
+              <h1 className="text-3xl font-bold mb-1">LiteraCIA</h1>
+              <p className="text-ax5-accent text-lg font-medium">Quiz Radar Vocal</p>
+              <p className="text-slate-400 text-sm mt-2">18 questions ouvertes — ~15 minutes — Evaluation IA en temps reel</p>
+            </div>
+
+            {/* Form */}
+            <div className="bg-ax5-card rounded-2xl p-6 space-y-4 border border-slate-700">
+              <div>
+                <label className="block text-sm text-slate-400 mb-1.5">Identifiant utilisateur</label>
+                <input
+                  type="text" value={userId} onChange={e=>setUserId(e.target.value)}
+                  placeholder="ex: marie.tremblay@entreprise.ca"
+                  className="w-full px-4 py-2.5 rounded-lg bg-ax5-bg border border-slate-600 text-white placeholder-slate-500 focus:border-ax5-accent focus:outline-none transition"
+                  onKeyDown={e => e.key === 'Enter' && handleStart()}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1.5">Langue</label>
+                <select value={language} onChange={e=>setLanguage(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg bg-ax5-bg border border-slate-600 text-white focus:border-ax5-accent focus:outline-none transition">
+                  <option value="fr-CA">Francais (Quebec)</option>
+                  <option value="en-CA">English (Canada)</option>
+                </select>
+              </div>
+              <button onClick={handleStart} disabled={!userId.trim()}
+                className="w-full py-3 rounded-lg bg-ax5-accent text-white font-semibold hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2">
+                <MicIcon size={20}/> Demarrer le Quiz Vocal
+              </button>
+              <p className="text-xs text-slate-500 text-center">Assurez-vous d'avoir un microphone fonctionnel</p>
+            </div>
+          </div>
+
+          {showConsent && (
+            <ConsentModal
+              onAccept={() => { setShowConsent(false); onStart(userId.trim(), language); }}
+              onDecline={() => setShowConsent(false)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ============================================================
+    // QUIZ SCREEN
+    // ============================================================
+    function QuizScreen({ sessionId, transcripts, questionNum, currentAxe, elapsed, isGeminiSpeaking, isPaused, onPause, onStop }) {
+      const bottomRef = useRef(null);
+      useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:'smooth' }); }, [transcripts]);
+
+      const pct = Math.round((questionNum / 18) * 100);
+
+      return (
+        <div className="min-h-screen flex flex-col p-4 max-w-2xl mx-auto fade-in">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-semibold">Quiz Radar Vocal</h2>
+              <p className="text-xs text-slate-500">Session: {sessionId?.substring(0,8)}...</p>
+            </div>
+            <div className="text-right">
+              <p className="text-sm font-mono text-slate-300">{fmtTime(elapsed)} / ~20:00</p>
+            </div>
+          </div>
+
+          {/* Progress */}
+          <div className="mb-4">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-slate-400">Question {Math.min(questionNum + 1, 18)}/18</span>
+              <span className="text-ax5-accent">{currentAxe}</span>
+            </div>
+            <div className="h-2 bg-ax5-bg rounded-full overflow-hidden">
+              <div className="h-full bg-ax5-accent rounded-full transition-all duration-500" style={{width:`${pct}%`}}/>
+            </div>
+          </div>
+
+          {/* Mic indicator */}
+          <div className="flex justify-center my-6">
+            <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${
+              isGeminiSpeaking
+                ? 'bg-ax5-success/20 text-ax5-success'
+                : isPaused
+                  ? 'bg-slate-700 text-slate-400'
+                  : 'bg-ax5-accent/20 text-ax5-accent mic-pulse'
+            }`}>
+              <MicIcon size={36}/>
+            </div>
+          </div>
+          <p className="text-center text-sm mb-4 text-slate-400">
+            {isGeminiSpeaking ? "Gemini parle..." : isPaused ? "En pause" : "A vous de parler..."}
+          </p>
+
+          {/* Transcript */}
+          <div className="flex-1 bg-ax5-card rounded-xl border border-slate-700 p-4 overflow-y-auto mb-4" style={{maxHeight:'320px',minHeight:'180px'}}>
+            {transcripts.length === 0 && <p className="text-slate-500 text-sm italic">L'assistant va vous accueillir...</p>}
+            {transcripts.map((t, i) => (
+              <div key={i} className={`mb-3 text-sm ${t.role === 'gemini' ? 'text-slate-200' : 'text-ax5-accent'}`}>
+                <span className="text-xs text-slate-500 mr-2">{t.role === 'gemini' ? 'Assistant' : 'Vous'}</span>
+                <span>{t.text}</span>
+              </div>
+            ))}
+            <div ref={bottomRef}/>
+          </div>
+
+          {/* Controls */}
+          <div className="flex gap-3">
+            <button onClick={onPause}
+              className="flex-1 py-2.5 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-700 transition flex items-center justify-center gap-2 text-sm">
+              {isPaused ? <><PlayIcon/> Reprendre</> : <><PauseIcon/> Pause</>}
+            </button>
+            <button onClick={onStop}
+              className="flex-1 py-2.5 rounded-lg border border-red-800 text-red-400 hover:bg-red-900/30 transition flex items-center justify-center gap-2 text-sm">
+              Terminer
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // RESULTS SCREEN
+    // ============================================================
+    function RadarChartCanvas({ radarData }) {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        if (!canvasRef.current) return;
+        if (chartRef.current) chartRef.current.destroy();
+
+        chartRef.current = new Chart(canvasRef.current, {
+          type: 'radar',
+          data: {
+            labels: radarData.map(d => d.axe),
+            datasets: [{
+              label: 'Score',
+              data: radarData.map(d => d.score),
+              backgroundColor: 'rgba(59,130,246,0.25)',
+              borderColor: '#3b82f6',
+              borderWidth: 2,
+              pointBackgroundColor: '#3b82f6',
+              pointBorderColor: '#3b82f6',
+              pointRadius: 4,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              r: {
+                beginAtZero: true,
+                max: 100,
+                ticks: { stepSize: 20, color: '#64748b', backdropColor: 'transparent', font: { size: 10 } },
+                grid: { color: '#334155' },
+                angleLines: { color: '#334155' },
+                pointLabels: { color: '#94a3b8', font: { size: 11 } },
+              },
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#1e293b',
+                borderColor: '#475569',
+                borderWidth: 1,
+                titleColor: '#e2e8f0',
+                bodyColor: '#e2e8f0',
+                cornerRadius: 8,
+                callbacks: { label: (ctx) => `Score: ${ctx.raw}%` },
+              },
+            },
+          },
+        });
+
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
+      }, [radarData]);
+
+      return React.createElement('canvas', { ref: canvasRef });
+    }
+
+    function ResultsScreen({ result, onRestart }) {
+      if (!result) return null;
+
+      const { overall_score, level, axes, feedback, points_forts, axes_a_developper } = result;
+      const color = NIVEAUX_COLORS[level] || "#3b82f6";
+
+      // Radar data
+      const radarData = AXES_ORDER.map(a => ({
+        axe: a.label,
+        score: axes?.[a.key]?.score_pct ?? 0,
+      }));
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="max-w-2xl w-full fade-in space-y-6">
+            {/* Header */}
+            <div className="text-center">
+              <h2 className="text-2xl font-bold mb-1">Resultats du Quiz</h2>
+              <p className="text-slate-400">Votre profil de litteratie IA</p>
+            </div>
+
+            {/* Score global */}
+            <div className="bg-ax5-card rounded-2xl p-6 border border-slate-700 text-center">
+              <p className="text-5xl font-bold mb-1" style={{color}}>{Math.round(overall_score)}%</p>
+              <p className="text-xl font-semibold" style={{color}}>{level}</p>
+            </div>
+
+            {/* Radar */}
+            <div className="bg-ax5-card rounded-2xl p-4 border border-slate-700">
+              <h3 className="text-center text-sm text-slate-400 mb-2">Radar des 6 axes</h3>
+              <div style={{height: 320}}>
+                <RadarChartCanvas radarData={radarData} />
+              </div>
+            </div>
+
+            {/* Axes detail */}
+            <div className="bg-ax5-card rounded-2xl p-6 border border-slate-700 space-y-3">
+              <h3 className="text-sm text-slate-400 mb-2">Detail par axe</h3>
+              {AXES_ORDER.map(a => {
+                const sc = axes?.[a.key]?.score_pct ?? 0;
+                const niv = axes?.[a.key]?.niveau ?? "—";
+                const barColor = sc >= 80 ? '#10b981' : sc >= 60 ? '#3b82f6' : sc >= 40 ? '#eab308' : sc >= 20 ? '#f59e0b' : '#ef4444';
+                return (
+                  <div key={a.key}>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-slate-300">{a.label}</span>
+                      <span style={{color:barColor}} className="font-medium">{Math.round(sc)}% — {niv}</span>
+                    </div>
+                    <div className="h-2 bg-ax5-bg rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-700" style={{width:`${sc}%`, background:barColor}}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Feedback */}
+            {feedback && (
+              <div className="bg-ax5-card rounded-2xl p-6 border border-slate-700">
+                <h3 className="text-sm text-slate-400 mb-2">Debrief de l'assistant</h3>
+                <p className="text-slate-200 text-sm leading-relaxed">{feedback}</p>
+              </div>
+            )}
+
+            {/* Points forts / a developper */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {points_forts?.length > 0 && (
+                <div className="bg-ax5-card rounded-xl p-4 border border-green-900/50">
+                  <h4 className="text-ax5-success text-sm font-medium mb-2">Points forts</h4>
+                  <ul className="text-sm text-slate-300 space-y-1">
+                    {points_forts.map((p,i) => <li key={i} className="flex items-start gap-1.5"><span className="text-ax5-success mt-0.5">+</span>{p}</li>)}
+                  </ul>
+                </div>
+              )}
+              {axes_a_developper?.length > 0 && (
+                <div className="bg-ax5-card rounded-xl p-4 border border-yellow-900/50">
+                  <h4 className="text-ax5-warn text-sm font-medium mb-2">A developper</h4>
+                  <ul className="text-sm text-slate-300 space-y-1">
+                    {axes_a_developper.map((a,i) => <li key={i} className="flex items-start gap-1.5"><span className="text-ax5-warn mt-0.5">-</span>{a}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button onClick={onRestart}
+                className="flex-1 py-3 rounded-lg bg-ax5-accent text-white font-semibold hover:bg-blue-600 transition flex items-center justify-center gap-2">
+                <RefreshIcon/> Refaire le quiz
+              </button>
+              <a href="http://localhost:5000" target="_blank" rel="noopener"
+                className="flex-1 py-3 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-700 transition flex items-center justify-center gap-2 text-sm text-center">
+                Voir analyse detaillee (LiteraCIA)
+              </a>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // MAIN APP
+    // ============================================================
+    function App() {
+      const [screen, setScreen] = useState("welcome"); // welcome | quiz | results
+      const [sessionId, setSessionId] = useState(null);
+      const [transcripts, setTranscripts] = useState([]);
+      const [questionNum, setQuestionNum] = useState(0);
+      const [currentAxe, setCurrentAxe] = useState("Comprehension Technique IA");
+      const [elapsed, setElapsed] = useState(0);
+      const [isGeminiSpeaking, setIsGeminiSpeaking] = useState(false);
+      const [isPaused, setIsPaused] = useState(false);
+      const [result, setResult] = useState(null);
+      const [error, setError] = useState(null);
+
+      const wsRef = useRef(null);
+      const audioRef = useRef(null);
+      const timerRef = useRef(null);
+
+      // Timer
+      useEffect(() => {
+        if (screen === "quiz" && !isPaused) {
+          timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+          return () => clearInterval(timerRef.current);
+        } else {
+          clearInterval(timerRef.current);
+        }
+      }, [screen, isPaused]);
+
+      // Cleanup on unmount
+      useEffect(() => () => { cleanup(); }, []);
+
+      const cleanup = useCallback(() => {
+        if (wsRef.current) { try { wsRef.current.close(); } catch(e){} wsRef.current = null; }
+        if (audioRef.current) { audioRef.current.stop(); audioRef.current = null; }
+        clearInterval(timerRef.current);
+      }, []);
+
+      // ---- START QUIZ ----
+      const handleStart = useCallback(async (userId, language) => {
+        setError(null);
+        setTranscripts([]);
+        setQuestionNum(0);
+        setElapsed(0);
+        setResult(null);
+        setIsGeminiSpeaking(false);
+        setIsPaused(false);
+
+        try {
+          // WebSocket
+          const ws = new WebSocket(WS_URL);
+          wsRef.current = ws;
+
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ user_id: userId, language }));
+          };
+
+          ws.onmessage = (evt) => {
+            if (evt.data instanceof Blob) {
+              // Audio from Gemini
+              setIsGeminiSpeaking(true);
+              evt.data.arrayBuffer().then(buf => {
+                if (audioRef.current) audioRef.current.enqueuePlayback(buf);
+              });
+              return;
+            }
+            // JSON message
+            try {
+              const msg = JSON.parse(evt.data);
+              handleServerMessage(msg);
+            } catch(e) {
+              console.warn("Non-JSON message:", evt.data);
+            }
+          };
+
+          ws.onerror = (e) => {
+            console.error("WS error:", e);
+            setError("Erreur de connexion WebSocket. Verifiez que le serveur tourne sur le port 8003.");
+          };
+
+          ws.onclose = (e) => {
+            console.log("WS closed:", e.code, e.reason);
+          };
+
+          // Audio capture
+          const audio = new AudioEngine((chunk) => {
+            if (wsRef.current?.readyState === WebSocket.OPEN && !isPaused) {
+              wsRef.current.send(chunk);
+            }
+          });
+          audioRef.current = audio;
+          await audio.startCapture();
+
+          setScreen("quiz");
+
+        } catch (err) {
+          console.error("Start error:", err);
+          if (err.name === 'NotAllowedError') {
+            setError("Acces au microphone refuse. Autorisez le microphone et reessayez.");
+          } else {
+            setError("Erreur: " + err.message);
+          }
+        }
+      }, [isPaused]);
+
+      // ---- HANDLE SERVER MESSAGES ----
+      const handleServerMessage = useCallback((msg) => {
+        switch (msg.type) {
+          case "session_started":
+            setSessionId(msg.session_id);
+            break;
+
+          case "transcript":
+            setIsGeminiSpeaking(false);
+            setTranscripts(prev => {
+              // Merge consecutive gemini transcripts
+              if (prev.length > 0 && prev[prev.length-1].role === 'gemini') {
+                const updated = [...prev];
+                updated[updated.length-1] = { ...updated[updated.length-1], text: updated[updated.length-1].text + msg.text };
+                return updated;
+              }
+              return [...prev, { role: 'gemini', text: msg.text }];
+            });
+            break;
+
+          case "turn_complete":
+            setIsGeminiSpeaking(false);
+            // Next transcript from user side
+            setTranscripts(prev => [...prev, { role: 'user', text: '(ecoute...)' }]);
+            break;
+
+          case "tool_call_processed":
+            if (msg.function === "score_response" && msg.result) {
+              const qNum = msg.result.question_number || 0;
+              setQuestionNum(qNum);
+              const qId = msg.result.question_id || "";
+              setCurrentAxe(axeLabelFromId(qId));
+              // Remove the "(ecoute...)" placeholder if present
+              setTranscripts(prev => {
+                if (prev.length > 0 && prev[prev.length-1].text === '(ecoute...)') {
+                  return prev.slice(0, -1);
+                }
+                return prev;
+              });
+            }
+            if (msg.function === "finalize_quiz" && msg.result) {
+              handleQuizCompleted(msg.result);
+            }
+            break;
+
+          case "error":
+            setError(msg.message);
+            break;
+
+          default:
+            console.log("Unknown message type:", msg.type, msg);
+        }
+      }, []);
+
+      const handleQuizCompleted = useCallback((finalResult) => {
+        // Build result object for display
+        // We need axes data — fetch from session status or build from finalResult
+        const fetchResults = async () => {
+          try {
+            const resp = await fetch(`http://localhost:8003/api/voice/sessions/${sessionId}`);
+            const data = await resp.json();
+            setResult({
+              overall_score: finalResult.overall_score ?? data.score_global_pct ?? 0,
+              level: finalResult.level ?? data.niveau_global ?? "—",
+              axes: buildAxesMap(data.axes_partiels || {}),
+              feedback: data.participant_feedback || "",
+              points_forts: data.points_forts || [],
+              axes_a_developper: data.axes_a_developper || [],
+            });
+          } catch (e) {
+            // Fallback: use what we have
+            setResult({
+              overall_score: finalResult.overall_score ?? 0,
+              level: finalResult.level ?? "—",
+              axes: {},
+              feedback: "",
+              points_forts: [],
+              axes_a_developper: [],
+            });
+          }
+          cleanup();
+          setScreen("results");
+        };
+        fetchResults();
+      }, [sessionId, cleanup]);
+
+      const buildAxesMap = (partiels) => {
+        // Convert partial axes from session status to display format
+        const map = {};
+        const keyMap = {
+          "Compr. Technique IA":"comprehension_technique_ia",
+          "Comprehension Technique IA":"comprehension_technique_ia",
+          "Usage Operationnel":"usage_operationnel",
+          "Pensee Critique":"pensee_critique",
+          "Ethique & Conformite":"ethique_conformite",
+          "Collaboration Humain-IA":"collaboration_humain_ia",
+          "Collab. Humain-IA":"collaboration_humain_ia",
+          "Apprentissage Continu":"apprentissage_continu",
+        };
+        for (const [label, data] of Object.entries(partiels)) {
+          const key = keyMap[label];
+          if (key && data) {
+            const brut = data.score_brut_partiel || 0;
+            const pct = Math.round((brut / 60) * 100);
+            const niveau = pct >= 80 ? "Expert" : pct >= 60 ? "Avance" : pct >= 40 ? "Intermediaire" : pct >= 20 ? "Debutant" : "Novice";
+            map[key] = { score_pct: pct, niveau };
+          }
+        }
+        return map;
+      };
+
+      // ---- PAUSE / STOP ----
+      const handlePause = () => setIsPaused(p => !p);
+
+      const handleStop = useCallback(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "stop" }));
+        }
+        cleanup();
+        setScreen("welcome");
+      }, [cleanup]);
+
+      const handleRestart = useCallback(() => {
+        cleanup();
+        setResult(null);
+        setScreen("welcome");
+      }, [cleanup]);
+
+      // ---- RENDER ----
+      return (
+        <div className="min-h-screen">
+          {error && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-red-900/90 border border-red-700 text-red-200 px-5 py-3 rounded-xl z-50 max-w-md text-sm text-center fade-in">
+              {error}
+              <button onClick={() => setError(null)} className="ml-3 text-red-400 hover:text-white">x</button>
+            </div>
+          )}
+
+          {screen === "welcome" && <WelcomeScreen onStart={handleStart} />}
+          {screen === "quiz" && (
+            <QuizScreen
+              sessionId={sessionId}
+              transcripts={transcripts}
+              questionNum={questionNum}
+              currentAxe={currentAxe}
+              elapsed={elapsed}
+              isGeminiSpeaking={isGeminiSpeaking}
+              isPaused={isPaused}
+              onPause={handlePause}
+              onStop={handleStop}
+            />
+          )}
+          {screen === "results" && <ResultsScreen result={result} onRestart={handleRestart} />}
+        </div>
+      );
+    }
+
+    // ============================================================
+    // MOUNT
+    // ============================================================
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
