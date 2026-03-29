@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import random
+import re
 from typing import Optional
 
 logger = logging.getLogger("safetalkx5.generator")
@@ -132,7 +133,7 @@ REFS_REGLEMENTAIRES: dict[str, list[str]] = {
     "produit chimique": [
         "RSST art. 40-49 — Qualite de l'air",
         "SIMDUT 2015 — Systeme d'information sur les matieres dangereuses",
-        "Loi sur la sante et la securite du travail, art. 62.1-62.21",
+        "Loi sur la santé et la sécurité du travail, art. 62.1-62.21",
     ],
     "bruit": [
         "RSST art. 130-141 — Bruit",
@@ -174,8 +175,8 @@ def _get_refs(incident: dict) -> list[str]:
         refs.update(REFS_REGLEMENTAIRES.get("psy", []))
 
     if not refs:
-        refs.add("LSST art. 51 — Obligations generales de l'employeur")
-        refs.add("RSST — Reglement sur la sante et la securite du travail")
+        refs.add("LSST art. 51 — Obligations générales de l'employeur")
+        refs.add("RSST — Règlement sur la santé et la sécurité du travail")
 
     return sorted(refs)[:4]
 
@@ -336,6 +337,11 @@ class SafeTalkGenerator:
         # Traduction si demandee
         if langue == "en":
             talk = await self.translate_to_english(talk)
+
+        # Nettoyer les tags de section et balisage du texte narré
+        for section in talk.get("sections", []):
+            if "texte" in section:
+                section["texte"] = self._clean_narration_text(section["texte"])
 
         talk["config"] = {"mode": mode, "duree_minutes": duree, "langue": langue, "role_animateur": role}
         talk["mode_generation"] = self._mode
@@ -739,6 +745,21 @@ class SafeTalkGenerator:
     # ----------------------------------------------------------
     # JSON parser
     # ----------------------------------------------------------
+
+    @staticmethod
+    def _clean_narration_text(text: str) -> str:
+        """Nettoie le texte pour la narration vocale.
+
+        Supprime les tags [SECTION], [silence Xs] et balisage interne
+        pour que Gemini Live ou speechSynthesis lise du français naturel.
+        """
+        # Supprimer les tags de section : [TENSION], [HUMAIN], [IMAGE], etc.
+        text = re.sub(r"\[(?:TENSION|HUMAIN|IMAGE|POUR_TOI|ENJEUX|BOUCLE|DECISION|EPILOGUE_IA)\]\s*", "", text)
+        # Supprimer tout tag [MOT_EN_MAJUSCULES] restant
+        text = re.sub(r"\[[A-ZÀ-Ü_]{3,}\]\s*", "", text)
+        # Nettoyer les espaces multiples
+        text = re.sub(r"  +", " ", text).strip()
+        return text
 
     def _parse_json(self, text: str) -> dict:
         """Parse JSON tolerant aux blocs markdown."""

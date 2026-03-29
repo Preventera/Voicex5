@@ -493,7 +493,8 @@ class CNESSTParser:
             mask = candidates["SECTEUR_SCIAN"].astype(str).str.startswith(str(secteur_scian))
             candidates = candidates[mask]
 
-        # Filtrer par risque
+        # Filtrer par risque — avec fallback progressif
+        sector_candidates = candidates.copy()  # garder le secteur pour fallback
         if risk_type and risk_type.lower() in RISK_FILTERS:
             config = RISK_FILTERS[risk_type.lower()]
             risk_mask = pd.Series(False, index=candidates.index)
@@ -510,7 +511,16 @@ class CNESSTParser:
             for kw in config.get("agent_keywords", []):
                 risk_mask |= agent_col.str.contains(kw, na=False)
 
-            candidates = candidates[risk_mask]
+            risk_filtered = candidates[risk_mask]
+            if not risk_filtered.empty:
+                candidates = risk_filtered
+            else:
+                # Fallback : garder le secteur seul si aucun match risque
+                logger.info(
+                    "Aucun match risque '%s' dans secteur %s — fallback secteur seul",
+                    risk_type, secteur_scian,
+                )
+                candidates = sector_candidates
 
         # Mode ia_sst : prioriser TMS, machines, patterns recurrents
         if mode == "ia_sst" and not candidates.empty:

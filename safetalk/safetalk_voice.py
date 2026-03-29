@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 from voice.gemini_live_service import GeminiLiveService, GeminiMessage, GeminiMessageType
@@ -93,23 +94,33 @@ PHASES = [
 ]
 
 
+def _clean_for_gemini(text: str) -> str:
+    """Nettoie le texte avant envoi à Gemini Live — supprime balisage interne."""
+    text = re.sub(r"\[(?:TENSION|HUMAIN|IMAGE|POUR_TOI|ENJEUX|BOUCLE|DECISION|EPILOGUE_IA)\]\s*", "", text)
+    text = re.sub(r"\[[A-ZÀ-Ü_]{3,}\]\s*", "", text)
+    text = re.sub(r"\[silence\s*\d+s?\]", "", text)
+    return re.sub(r"  +", " ", text).strip()
+
+
 def build_safetalk_prompt(incident: dict, analysis: dict) -> str:
     """Construit le system prompt avec les données de l'incident."""
     # Incident sans contexte_secteur (trop verbeux)
     incident_clean = {k: v for k, v in incident.items() if k != "contexte_secteur"}
     sector_stats = incident.get("contexte_secteur", {})
 
+    # Nettoyer les textes d'analyse qui pourraient contenir du balisage
     analysis_clean = {
         "synthese": analysis.get("synthese", {}),
         "adc": analysis.get("adc", {}),
         "bowtie": analysis.get("bowtie", {}),
     }
 
-    return SAFETALK_SYSTEM_PROMPT.format(
+    prompt = SAFETALK_SYSTEM_PROMPT.format(
         incident_data=json.dumps(incident_clean, ensure_ascii=False, indent=2),
         analysis_data=json.dumps(analysis_clean, ensure_ascii=False, indent=2),
         sector_stats=json.dumps(sector_stats, ensure_ascii=False, indent=2),
     )
+    return _clean_for_gemini(prompt)
 
 
 class SafeTalkLiveSession:
