@@ -27,7 +27,7 @@ from safetalk.analysis_engine import AnalysisEngine
 from safetalk.cnesst_parser import CNESSTParser, RISK_FILTERS
 from safetalk.osha_scraper import OSHAScraper
 from safetalk.safetalk_generator import SafeTalkGenerator
-from safetalk.safetalk_voice import SafeTalkVoice
+from safetalk.safetalk_voice import SafeTalkLiveSession
 
 load_dotenv()
 
@@ -52,7 +52,7 @@ _generator: Optional[SafeTalkGenerator] = None
 _generated_talks: dict[str, dict] = {}
 
 # Sessions de narration actives
-_narration_sessions: dict[str, SafeTalkVoice] = {}
+_narration_sessions: dict[str, SafeTalkLiveSession] = {}
 
 # Stats
 _stats = {"talks_generated": 0, "narrations_started": 0}

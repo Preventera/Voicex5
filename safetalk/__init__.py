@@ -2,5 +2,6 @@
 
 from safetalk.cnesst_parser import CNESSTParser
 from safetalk.osha_scraper import OSHAScraper
+from safetalk.safetalk_voice import SafeTalkLiveSession
 
 __all__ = ["CNESSTParser", "OSHAScraper"]

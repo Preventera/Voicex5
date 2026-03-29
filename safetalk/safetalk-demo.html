@@ -228,228 +228,265 @@
     }
 
     // ============================================================
-    // SCREEN 2 — TALK TIMELINE + AUDIO
+    // AUDIO ENGINE — capture micro + playback (from voice-quiz-demo)
     // ============================================================
-    // ============================================================
-    // SpeechSynthesis narration engine
-    // ============================================================
-    function useSpeechNarration(sections) {
-      const [activeSection, setActiveSection] = useState(-1);
-      const [isPlaying, setIsPlaying] = useState(false);
-      const [isPaused, setIsPaused] = useState(false);
-      const utteranceRef = useRef(null);
-      const queueRef = useRef([]);
-      const currentIdxRef = useRef(-1);
-      const cancelledRef = useRef(false);
-
-      const getFrenchVoice = () => {
-        const voices = window.speechSynthesis.getVoices();
-        return voices.find(v => v.lang === "fr-CA") ||
-               voices.find(v => v.lang.startsWith("fr")) ||
-               voices[0] || null;
-      };
-
-      const speakSection = (idx) => {
-        if (cancelledRef.current || idx >= sections.length) {
-          setIsPlaying(false);
-          setActiveSection(sections.length);
-          return;
-        }
-        currentIdxRef.current = idx;
-        setActiveSection(idx);
-
-        const section = sections[idx];
-        let text = section.texte || "";
-
-        // Replace [silence Xs] with actual pauses via splitting
-        const parts = text.split(/\[silence\s*(\d+)s?\]/i);
-
-        const speakParts = (partIdx) => {
-          if (cancelledRef.current) return;
-          if (partIdx >= parts.length) {
-            // Section done — next section after a brief pause
-            setTimeout(() => speakSection(idx + 1), 800);
-            return;
-          }
-
-          const part = parts[partIdx];
-          if (partIdx % 2 === 1) {
-            // This is a captured pause duration
-            const pauseMs = parseInt(part, 10) * 1000 || 2000;
-            setTimeout(() => speakParts(partIdx + 1), pauseMs);
-            return;
-          }
-
-          const trimmed = part.trim();
-          if (!trimmed) { speakParts(partIdx + 1); return; }
-
-          const utt = new SpeechSynthesisUtterance(trimmed);
-          utteranceRef.current = utt;
-          const voice = getFrenchVoice();
-          if (voice) utt.voice = voice;
-          utt.lang = "fr-CA";
-          utt.rate = 0.9;
-          utt.pitch = 1.0;
-          utt.onend = () => { if (!cancelledRef.current) speakParts(partIdx + 1); };
-          utt.onerror = (e) => { if (e.error !== "canceled") speakParts(partIdx + 1); };
-          window.speechSynthesis.speak(utt);
+    const SAMPLE_RATE = 16000;
+    class MicCapture {
+      constructor(onChunk) {
+        this.onChunk = onChunk; this.stream = null; this.ctx = null; this.src = null; this.proc = null;
+      }
+      async start() {
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+        this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+        this.src = this.ctx.createMediaStreamSource(this.stream);
+        this.proc = this.ctx.createScriptProcessor(4096, 1, 1);
+        this.proc.onaudioprocess = (e) => {
+          const f32 = e.inputBuffer.getChannelData(0);
+          const i16 = new Int16Array(f32.length);
+          for (let i = 0; i < f32.length; i++) { const s = Math.max(-1, Math.min(1, f32[i])); i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF; }
+          this.onChunk(i16.buffer);
         };
-
-        speakParts(0);
-      };
-
-      const play = () => {
-        if (isPlaying) return;
-        cancelledRef.current = false;
-        setIsPlaying(true);
-        setIsPaused(false);
-        // Ensure voices are loaded
-        if (window.speechSynthesis.getVoices().length === 0) {
-          window.speechSynthesis.onvoiceschanged = () => speakSection(0);
-        } else {
-          speakSection(0);
-        }
-      };
-
-      const pause = () => {
-        if (isPaused) {
-          window.speechSynthesis.resume();
-          setIsPaused(false);
-        } else {
-          window.speechSynthesis.pause();
-          setIsPaused(true);
-        }
-      };
-
-      const stop = () => {
-        cancelledRef.current = true;
-        window.speechSynthesis.cancel();
-        setIsPlaying(false);
-        setIsPaused(false);
-        setActiveSection(-1);
-      };
-
-      return { activeSection, isPlaying, isPaused, play, pause, stop };
+        this.src.connect(this.proc); this.proc.connect(this.ctx.destination);
+      }
+      stop() {
+        if (this.proc) { this.proc.disconnect(); this.proc = null; }
+        if (this.src) { this.src.disconnect(); this.src = null; }
+        if (this.ctx) { this.ctx.close(); this.ctx = null; }
+        if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+      }
     }
 
-    function TalkScreen({ talk, onBack, onRestart }) {
-      const sections = talk.sections || [];
-      const titre = talk.titre || "Causerie SST";
-      const secteur = talk.secteur || "";
+    // Phase definitions
+    const PHASES = [
+      { id: 1, nom: "Accroche", icon: "\u{1F3AF}", duree: "2 min" },
+      { id: 2, nom: "L'histoire", icon: "\u{1F4D6}", duree: "5 min" },
+      { id: 3, nom: "Enjeux", icon: "\u26A0\uFE0F", duree: "3 min" },
+      { id: 4, nom: "Actions", icon: "\u2705", duree: "3 min" },
+      { id: 5, nom: "Cl\u00F4ture", icon: "\u{1F3C1}", duree: "2 min" },
+    ];
 
-      const narration = useSpeechNarration(sections);
+    const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+
+    // ============================================================
+    // SCREEN 2 — LIVE INTERACTIVE SESSION
+    // ============================================================
+    function LiveTalkScreen({ talk, onBack, onRestart }) {
+      const [sessionStarted, setSessionStarted] = useState(false);
+      const [isGeminiSpeaking, setIsGeminiSpeaking] = useState(false);
+      const [elapsed, setElapsed] = useState(0);
+      const [transcripts, setTranscripts] = useState([]);
+      const [error, setError] = useState(null);
+      const [currentPhase, setCurrentPhase] = useState(0);
+
+      const wsRef = useRef(null);
+      const micRef = useRef(null);
+      const audioRef = useRef(new AudioEngine());
+      const timerRef = useRef(null);
+      const bottomRef = useRef(null);
+
+      useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [transcripts]);
+
+      // Timer
+      useEffect(() => {
+        if (sessionStarted) {
+          timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+          return () => clearInterval(timerRef.current);
+        }
+      }, [sessionStarted]);
+
+      // Phase estimation by elapsed time
+      useEffect(() => {
+        if (elapsed < 120) setCurrentPhase(0);
+        else if (elapsed < 420) setCurrentPhase(1);
+        else if (elapsed < 600) setCurrentPhase(2);
+        else if (elapsed < 780) setCurrentPhase(3);
+        else setCurrentPhase(4);
+      }, [elapsed]);
+
+      const cleanup = useCallback(() => {
+        clearInterval(timerRef.current);
+        if (wsRef.current) { try { wsRef.current.close(); } catch(e){} wsRef.current = null; }
+        if (micRef.current) { micRef.current.stop(); micRef.current = null; }
+        audioRef.current.stop();
+      }, []);
+
+      useEffect(() => () => cleanup(), []);
+
+      const handleStart = async () => {
+        setError(null);
+        try {
+          // Start mic capture
+          const mic = new MicCapture((chunk) => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(chunk);
+          });
+          await mic.start();
+          micRef.current = mic;
+
+          // Open WebSocket
+          const ws = new WebSocket(`${WS_BASE}/ws/safetalk/live`);
+          wsRef.current = ws;
+
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ talk_id: talk.talk_id }));
+          };
+
+          ws.onmessage = (evt) => {
+            if (evt.data instanceof Blob) {
+              setIsGeminiSpeaking(true);
+              evt.data.arrayBuffer().then(buf => audioRef.current.enqueue(buf));
+              return;
+            }
+            try {
+              const msg = JSON.parse(evt.data);
+              if (msg.type === "session_started") setSessionStarted(true);
+              if (msg.type === "transcript") {
+                setIsGeminiSpeaking(false);
+                setTranscripts(prev => {
+                  if (prev.length > 0 && prev[prev.length-1].role === 'animateur') {
+                    const u = [...prev]; u[u.length-1] = { ...u[u.length-1], text: u[u.length-1].text + msg.text }; return u;
+                  }
+                  return [...prev, { role: 'animateur', text: msg.text }];
+                });
+              }
+              if (msg.type === "turn_complete") {
+                setIsGeminiSpeaking(false);
+                setTranscripts(prev => [...prev, { role: 'participant', text: '(\u00E9coute...)' }]);
+              }
+              if (msg.type === "error") { setError(msg.message); }
+            } catch(e) {}
+          };
+
+          ws.onerror = () => setError("Erreur WebSocket. V\u00E9rifiez que le serveur tourne.");
+          ws.onclose = () => setSessionStarted(false);
+          setSessionStarted(true);
+
+        } catch(err) {
+          if (err.name === 'NotAllowedError') setError("Acc\u00E8s au microphone refus\u00E9.");
+          else setError("Erreur: " + err.message);
+        }
+      };
+
+      const handleStop = () => { cleanup(); setSessionStarted(false); };
 
       const handleCopy = () => {
+        const sections = talk.sections || [];
         const text = sections.map(s => `[${s.principe?.toUpperCase()}]\n${s.texte}`).join("\n\n");
         navigator.clipboard.writeText(text).catch(()=>{});
       };
 
+      const titre = talk.titre || "Causerie SST";
+      const secteur = talk.secteur || "";
+
       return (
         <div className="min-h-screen p-4 max-w-2xl mx-auto fade-in">
           {/* Header */}
-          <div className="mb-4">
-            <button onClick={onBack} className="text-slate-500 hover:text-slate-300 text-sm mb-2 flex items-center gap-1">
-              &larr; Retour
-            </button>
-            <h2 className="text-xl font-bold">{titre}</h2>
-            <div className="flex gap-3 mt-1 text-xs text-slate-500">
-              <span className="px-2 py-0.5 rounded bg-st-surface">{secteur}</span>
-              <span className="px-2 py-0.5 rounded bg-st-surface">{talk.duree_estimee_minutes || 5} min</span>
-              {talk.config?.mode === "ia_sst" && <span className="px-2 py-0.5 rounded bg-st-blue/20 text-st-blue">IA x SST</span>}
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <button onClick={() => { handleStop(); onBack(); }} className="text-slate-500 hover:text-slate-300 text-sm mb-1 flex items-center gap-1">&larr; Retour</button>
+              <h2 className="text-lg font-bold">{titre}</h2>
+              <div className="flex gap-2 mt-1 text-xs text-slate-500">
+                <span className="px-2 py-0.5 rounded bg-st-surface">{secteur}</span>
+                <span className="px-2 py-0.5 rounded bg-st-surface">10-15 min</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-sm font-mono text-slate-300">{fmtTime(elapsed)}</p>
             </div>
           </div>
 
-          {/* Audio controls */}
-          <div className="flex gap-2 mb-5">
-            {!isPlaying ? (
-              <button onClick={handlePlay}
-                className="flex-1 py-2.5 rounded-xl bg-st-accent text-white font-semibold hover:bg-orange-600 transition flex items-center justify-center gap-2">
-                <span>{"\u25B6"}</span> Ecouter la causerie
-              </button>
-            ) : (
-              <button onClick={handleStop}
-                className="flex-1 py-2.5 rounded-xl border border-red-800 text-red-400 hover:bg-red-900/20 transition flex items-center justify-center gap-2">
-                <span>{"\u23F9"}</span> Arreter
-              </button>
-            )}
-            <button onClick={handleCopy}
-              className="py-2.5 px-4 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm">
-              {"\uD83D\uDCCB"} Copier
-            </button>
+          {/* Phase dots */}
+          <div className="flex items-center justify-center gap-2 mb-4">
+            {PHASES.map((p, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all ${
+                  i === currentPhase ? "bg-st-accent text-white ring-2 ring-st-accent/40" :
+                  i < currentPhase ? "bg-green-600/30 text-green-400" : "bg-st-surface text-slate-600"
+                }`}>{p.icon}</div>
+                {i < 4 && <div className={`w-6 h-0.5 ${i < currentPhase ? "bg-green-600" : "bg-gray-700"}`}/>}
+              </div>
+            ))}
           </div>
+          <p className="text-center text-xs text-slate-500 mb-4">
+            Phase {currentPhase + 1}/5 — {PHASES[currentPhase]?.nom} ({PHASES[currentPhase]?.duree})
+          </p>
 
-          {/* Progress */}
-          {isPlaying && (
-            <div className="mb-4">
-              <div className="flex justify-between text-xs text-slate-500 mb-1">
-                <span>Section {Math.min(activeSection + 1, sections.length)}/{sections.length}</span>
-                <span>{activeSection >= sections.length ? "Termine" : "En cours..."}</span>
-              </div>
-              <div className="h-1.5 bg-st-bg rounded-full overflow-hidden">
-                <div className="h-full bg-st-accent rounded-full transition-all duration-500" style={{width:`${Math.min(((activeSection+1)/sections.length)*100, 100)}%`}}/>
-              </div>
+          {/* Start button or mic indicator */}
+          {!sessionStarted ? (
+            <div className="text-center my-8">
+              <button onClick={handleStart}
+                className="py-4 px-8 rounded-2xl bg-st-accent text-white font-bold text-lg hover:bg-orange-600 transition pulse-accent flex items-center justify-center gap-3 mx-auto">
+                <span className="text-2xl">{"\uD83C\uDFA4"}</span> D\u00E9marrer la causerie live
+              </button>
+              <p className="text-xs text-slate-500 mt-3">Microphone requis — Gemini anime la causerie</p>
+              {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
             </div>
+          ) : (
+            <>
+              {/* Mic / speaker indicator */}
+              <div className="flex justify-center my-4">
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${
+                  isGeminiSpeaking ? "bg-st-accent/20 text-st-accent speak-pulse" : "bg-green-600/20 text-green-400 pulse-accent"
+                }`}>
+                  {isGeminiSpeaking
+                    ? <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                    : <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                  }
+                </div>
+              </div>
+              <p className="text-center text-sm mb-3 font-medium" style={{color: isGeminiSpeaking ? '#f97316' : '#22c55e'}}>
+                {isGeminiSpeaking ? "L'animateur parle..." : "\u00C0 vous de r\u00E9pondre..."}
+              </p>
+
+              {/* Transcript */}
+              <div className="bg-st-card rounded-xl border border-gray-800 p-4 overflow-y-auto mb-4" style={{maxHeight:'300px',minHeight:'150px'}}>
+                {transcripts.length === 0 && <p className="text-slate-500 text-sm italic">L'animateur va commencer...</p>}
+                {transcripts.map((t, i) => (
+                  <div key={i} className={`mb-2 text-sm ${t.role === 'animateur' ? 'text-slate-200' : 'text-green-400'}`}>
+                    <span className="text-xs text-slate-500 mr-2">{t.role === 'animateur' ? 'Animateur' : 'Participant'}</span>
+                    <span>{t.text}</span>
+                  </div>
+                ))}
+                <div ref={bottomRef}/>
+              </div>
+
+              {/* Controls */}
+              <div className="flex gap-2">
+                <button onClick={handleStop}
+                  className="flex-1 py-2.5 rounded-xl border border-red-800 text-red-400 hover:bg-red-900/20 transition flex items-center justify-center gap-2 text-sm">
+                  {"\u23F9"} Terminer la causerie
+                </button>
+                <button onClick={handleCopy}
+                  className="py-2.5 px-4 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm">
+                  {"\uD83D\uDCCB"} Copier
+                </button>
+              </div>
+              {error && <p className="text-red-400 text-sm text-center mt-2">{error}</p>}
+            </>
           )}
 
-          {/* Timeline */}
-          <div className="relative mb-6">
-            <div className="timeline-line"></div>
-            {sections.map((s, i) => {
-              const meta = PRINCIPE_META[s.principe] || { icon: "\u25CF", label: s.principe, color: "#94a3b8" };
-              const isActive = isPlaying && i === activeSection;
-              const isDone = i < activeSection;
-              return (
-                <div key={i} className={`relative pl-12 pb-5 ${isActive ? "section-active" : ""}`}>
-                  {/* Dot */}
-                  <div className={`timeline-dot absolute left-2.5 w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs transition-all ${
-                    isActive ? "border-st-accent bg-st-accent" : isDone ? "border-green-600 bg-green-600" : "border-gray-600 bg-st-card"
-                  }`} style={{top: 2}}>
-                    {isDone ? "\u2713" : ""}
-                  </div>
-
-                  {/* Card */}
-                  <div className={`bg-st-card rounded-xl border p-4 transition-all ${
-                    isActive ? "border-st-accent shadow-lg shadow-st-accent/10" : "border-gray-800"
-                  }`}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-base">{meta.icon}</span>
-                      <span className="text-sm font-semibold" style={{color: meta.color}}>{meta.label}</span>
-                      <span className="text-xs text-slate-600 ml-auto">{s.timing}</span>
-                    </div>
-                    <p className="text-sm text-slate-300 leading-relaxed">{s.texte}</p>
-                    {s.note_animateur && (
-                      <p className="text-xs text-slate-600 italic mt-2">{"\u{1F4AC}"} {s.note_animateur}</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          {/* Summary footer (always visible) */}
+          <div className="mt-6">
+            <SummarySection talk={talk} onRestart={() => { handleStop(); onRestart(); }} onCopy={handleCopy} />
           </div>
-
-          {/* Summary footer */}
-          <SummarySection talk={talk} onRestart={onRestart} onCopy={handleCopy} onReplay={handlePlay} />
         </div>
       );
     }
 
     // ============================================================
-    // SCREEN 3 — SUMMARY + EXPORT
+    // SUMMARY SECTION
     // ============================================================
-    function SummarySection({ talk, onRestart, onCopy, onReplay }) {
+    function SummarySection({ talk, onRestart, onCopy }) {
       return (
         <div className="space-y-4 pb-8">
-          {/* Reflexe du jour */}
           {talk.reflexe_du_jour && (
             <div className="bg-st-accent/10 border border-st-accent/30 rounded-xl p-4 text-center">
-              <p className="text-xs text-st-accent uppercase tracking-wider mb-1">Reflexe du jour</p>
+              <p className="text-xs text-st-accent uppercase tracking-wider mb-1">R\u00E9flexe du jour</p>
               <p className="text-lg font-bold text-st-accent">{talk.reflexe_du_jour}</p>
             </div>
           )}
-
-          {/* Refs */}
           {talk.references_reglementaires?.length > 0 && (
             <div className="bg-st-card rounded-xl border border-gray-800 p-4">
-              <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">References reglementaires</p>
+              <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">R\u00E9f\u00E9rences r\u00E9glementaires</p>
               <ul className="space-y-1">
                 {talk.references_reglementaires.map((r,i) => (
                   <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
@@ -459,26 +496,18 @@
               </ul>
             </div>
           )}
-
-          {/* Source */}
           <div className="flex items-center justify-between text-xs text-slate-600 px-1">
-            <span>Source : {talk.source_incident || "anonymise"}</span>
-            {talk.generation_time_s && <span>Genere en {talk.generation_time_s}s</span>}
+            <span>Source : {talk.source_incident || "anonymis\u00E9"}</span>
+            {talk.generation_time_s && <span>G\u00E9n\u00E9r\u00E9 en {talk.generation_time_s}s</span>}
           </div>
-
-          {/* Actions */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <button onClick={onCopy}
               className="py-2.5 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm flex items-center justify-center gap-1">
-              {"\uD83D\uDCCB"} Copier
-            </button>
-            <button onClick={onReplay}
-              className="py-2.5 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm flex items-center justify-center gap-1">
-              {"\uD83C\uDFA4"} Reecouter
+              {"\uD83D\uDCCB"} Copier le texte
             </button>
             <button onClick={onRestart}
               className="py-2.5 rounded-xl bg-st-accent/10 border border-st-accent/30 text-st-accent hover:bg-st-accent/20 transition text-sm flex items-center justify-center gap-1">
-              {"\uD83D\uDD04"} Nouvelle
+              {"\uD83D\uDD04"} Nouvelle causerie
             </button>
           </div>
         </div>
@@ -498,7 +527,7 @@
             <SelectionScreen onGenerate={(t) => { setTalk(t); setScreen("talk"); }} />
           )}
           {screen === "talk" && talk && (
-            <TalkScreen
+            <LiveTalkScreen
               talk={talk}
               onBack={() => setScreen("select")}
               onRestart={() => { setTalk(null); setScreen("select"); }}

@@ -32,7 +32,7 @@ from voice.voice_quiz_agent import VoiceQuizAgent
 
 try:
     from safetalk.api_safetalk import router as safetalk_router, _generated_talks
-    from safetalk.safetalk_voice import SafeTalkVoice
+    from safetalk.safetalk_voice import SafeTalkLiveSession
     _safetalk_available = True
 except ImportError:
     _safetalk_available = False
@@ -176,63 +176,111 @@ else:
 
 
 # ============================================================
-# 2a. WebSocket endpoint — /ws/safetalk/narrate
+# 2a. WebSocket endpoint — /ws/safetalk/live (causerie interactive)
 # ============================================================
 
-if _safetalk_available:
-    @app.websocket("/ws/safetalk/narrate")
-    async def ws_safetalk_narrate(websocket: WebSocket):
-        """WebSocket narration vocale SafeTalkX5.
+@app.websocket("/ws/safetalk/live")
+async def ws_safetalk_live(websocket: WebSocket):
+    """WebSocket causerie interactive SafeTalkX5 via Gemini Live.
 
-        Client envoie JSON init avec talk_id ou talk complet.
-        Serveur stream audio Gemini Live + events section_complete.
-        """
+    Bidirectionnel — même architecture que /ws/voice/quiz.
+    Client envoie : JSON init (talk_id) puis bytes (audio micro).
+    Serveur envoie : bytes (audio Gemini) + JSON (events).
+    """
+    if not _safetalk_available:
         await websocket.accept()
-        voice: Optional[SafeTalkVoice] = None
+        await websocket.send_json({"type": "error", "message": "SafeTalkX5 non disponible"})
+        await websocket.close()
+        return
 
-        try:
-            raw_init = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-            init_msg = json.loads(raw_init)
+    await websocket.accept()
+    session: Optional[SafeTalkLiveSession] = None
 
-            # Recuperer le talk par ID ou depuis le message directement
-            talk_id = init_msg.get("talk_id")
-            talk = None
-            if talk_id and talk_id in _generated_talks:
-                talk = _generated_talks[talk_id]
-            elif "sections" in init_msg:
-                talk = init_msg
-            else:
-                await websocket.send_json({"type": "error", "message": f"Talk non trouve: {talk_id}"})
-                return
+    try:
+        # Phase 1 : Init — recevoir talk_id avec incident + analyse
+        raw_init = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+        init_msg = json.loads(raw_init)
 
-            voice = SafeTalkVoice()
+        talk_id = init_msg.get("talk_id")
+        talk = None
+        if talk_id and talk_id in _generated_talks:
+            talk = _generated_talks[talk_id]
+        elif "incident" in init_msg:
+            talk = init_msg
+        else:
+            await websocket.send_json({"type": "error", "message": f"Talk non trouvé: {talk_id}"})
+            return
 
-            await websocket.send_json({
-                "type": "narration_starting",
-                "talk_id": talk_id or "inline",
-                "titre": talk.get("titre", ""),
-                "sections": len(talk.get("sections", [])),
-            })
+        incident = talk.get("incident", {})
+        analysis_summary = talk.get("analysis_summary", {})
+        analysis = {"synthese": analysis_summary, "adc": {}, "bowtie": {}}
 
-            async for event in voice.stream_narration(talk):
-                if event["type"] == "audio":
-                    await websocket.send_bytes(event["data"])
-                else:
-                    await websocket.send_json(event)
+        # Créer session Gemini Live avec prompt causerie
+        session = SafeTalkLiveSession(incident, analysis)
+        session_id = await session.start()
 
-        except WebSocketDisconnect:
-            logger.info("Client narration SafeTalk deconnecte")
-        except asyncio.TimeoutError:
-            logger.warning("Timeout init narration SafeTalk")
-        except Exception as exc:
-            logger.error("Erreur narration SafeTalk WS: %s", exc, exc_info=True)
+        await websocket.send_json({
+            "type": "session_started",
+            "session_id": session_id,
+            "titre": talk.get("titre", "Causerie SST"),
+            "secteur": talk.get("secteur", ""),
+        })
+
+        # Phase 2 : Boucle bidirectionnelle (identique au quiz)
+        async def frontend_to_gemini():
+            while True:
+                msg = await websocket.receive()
+                if "bytes" in msg and msg["bytes"]:
+                    await session.relay_audio(msg["bytes"])
+                elif "text" in msg and msg["text"]:
+                    data = json.loads(msg["text"])
+                    if data.get("type") == "stop":
+                        logger.info("SafeTalk live arrêté par le client")
+                        break
+
+        async def gemini_to_frontend():
+            async for msg in session.gemini.receive_from_gemini():
+                if msg.type == GeminiMessageType.AUDIO:
+                    await websocket.send_bytes(msg.data)
+                elif msg.type == GeminiMessageType.TRANSCRIPT:
+                    await websocket.send_json({"type": "transcript", "text": msg.data})
+                elif msg.type == GeminiMessageType.TURN_COMPLETE:
+                    await websocket.send_json({"type": "turn_complete"})
+                elif msg.type == GeminiMessageType.ERROR:
+                    await websocket.send_json({"type": "error", "message": str(msg.data)})
+                    break
+
+        task_f2g = asyncio.create_task(frontend_to_gemini())
+        task_g2f = asyncio.create_task(gemini_to_frontend())
+        done, pending = await asyncio.wait(
+            {task_f2g, task_g2f}, return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
             try:
-                await websocket.send_json({"type": "error", "message": str(exc)})
-            except Exception:
+                await task
+            except asyncio.CancelledError:
                 pass
-        finally:
-            if voice:
-                await voice.stop_narration()
+
+    except WebSocketDisconnect:
+        logger.info("Client SafeTalk live déconnecté")
+    except asyncio.TimeoutError:
+        logger.warning("Timeout init SafeTalk live")
+    except ConnectionError as exc:
+        logger.warning("Connexion Gemini perdue SafeTalk: %s", exc)
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.error("Erreur SafeTalk live WS: %s", exc, exc_info=True)
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    finally:
+        if session:
+            await session.close()
 
 
 # ============================================================
