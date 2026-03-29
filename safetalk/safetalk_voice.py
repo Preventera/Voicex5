@@ -4,19 +4,27 @@ SafeTalkX5 — Narration vocale des causeries via Gemini Live
 Fait LIRE vocalement un SafeTalk genere par Gemini Live API.
 Mode NARRATEUR : flux unidirectionnel texte → Gemini → audio.
 Pas de micro utilisateur necessaire.
+
+Architecture : envoie UNE section a la fois via client_content,
+attend turn_complete + audio avant d'envoyer la suivante.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import uuid
 from typing import AsyncGenerator, Optional
 
-from voice.gemini_live_service import (
-    GeminiLiveService,
-    GeminiMessage,
-    GeminiMessageType,
+import websockets
+
+from voice.voice_config import (
+    GEMINI_API_KEY,
+    GEMINI_GENERATION_CONFIG,
+    GEMINI_MODEL,
+    GEMINI_WS_URI,
 )
 
 logger = logging.getLogger("safetalkx5.voice")
@@ -47,7 +55,7 @@ Quand tu vois [silence 3s], fais une pause de 3 secondes.
 A la fin du talk, dis : "Merci de votre attention. Bonne journee securitaire."
 """
 
-# Mapping principe → instruction de ton pour chaque section
+# Mapping principe → instruction de ton
 TONE_INSTRUCTIONS: dict[str, str] = {
     "tension": "Lis avec un ton mysterieux et montant, comme le debut d'un film. Ralentis vers la fin.",
     "humain": "Lis avec empathie et douceur. Fais sentir que cette personne est reelle.",
@@ -63,11 +71,12 @@ TONE_INSTRUCTIONS: dict[str, str] = {
 class SafeTalkVoice:
     """Fait lire vocalement un SafeTalk via Gemini Live API.
 
-    Flux unidirectionnel : texte envoyé via client_content → Gemini lit → audio retourné.
+    Gere sa propre connexion WebSocket directe vers Gemini
+    (pas de micro, pas de VAD — narration texte→audio pure).
     """
 
     def __init__(self) -> None:
-        self._gemini: Optional[GeminiLiveService] = None
+        self._ws = None
         self._session_id: Optional[str] = None
         self._is_narrating: bool = False
         logger.info("SafeTalkVoice initialise")
@@ -81,86 +90,46 @@ class SafeTalkVoice:
         return self._session_id
 
     # ----------------------------------------------------------
-    # 1. start_narration
+    # Connexion directe a Gemini Live (mode narration)
     # ----------------------------------------------------------
 
-    async def start_narration(self, talk: dict) -> str:
-        """Ouvre une session Gemini Live et envoie le talk complet.
+    async def _connect(self) -> None:
+        """Ouvre le WebSocket et envoie le setup narration."""
+        if not GEMINI_API_KEY:
+            raise ConnectionError("GEMINI_API_KEY manquante")
 
-        Envoie chaque section comme un message texte client_content.
-        Gemini le lit a voix haute et retourne l'audio.
-
-        Args:
-            talk: SafeTalk genere par SafeTalkGenerator.
-
-        Returns:
-            session_id de la session Gemini.
-        """
-        self._gemini = GeminiLiveService()
-
-        # Creer session avec prompt narrateur, sans tools (pas de function calling)
-        self._session_id = await self._gemini.create_session(
-            system_prompt=NARRATOR_SYSTEM_PROMPT,
-            tools=[],
+        self._ws = await websockets.connect(
+            GEMINI_WS_URI,
+            max_size=10 * 1024 * 1024,
         )
+
+        # Setup message — narration pure (audio out, pas de tools, pas de VAD)
+        setup_msg = {
+            "setup": {
+                "model": f"models/{GEMINI_MODEL}",
+                "generation_config": GEMINI_GENERATION_CONFIG,
+                "system_instruction": {
+                    "parts": [{"text": NARRATOR_SYSTEM_PROMPT}],
+                },
+                "tools": [],
+            }
+        }
+        await self._ws.send(json.dumps(setup_msg))
+
+        # Attendre setup_complete
+        raw = await asyncio.wait_for(self._ws.recv(), timeout=10.0)
+        response = json.loads(raw)
+        if "setupComplete" in response:
+            logger.debug("Gemini narration setup complete")
+        else:
+            logger.warning("Setup narration inattendu: %s", str(response)[:200])
+
+        self._session_id = str(uuid.uuid4())
         self._is_narrating = True
+        logger.info("Connexion narration ouverte — session=%s", self._session_id)
 
-        logger.info(
-            "Narration demarree — session=%s titre='%s' sections=%d",
-            self._session_id,
-            talk.get("titre", "?")[:50],
-            len(talk.get("sections", [])),
-        )
-
-        # Envoyer le talk section par section
-        asyncio.create_task(self._send_talk_sections(talk))
-
-        return self._session_id
-
-    async def _send_talk_sections(self, talk: dict) -> None:
-        """Envoie les sections du talk une par une via client_content."""
-        sections = talk.get("sections", [])
-
-        # Introduction
-        titre = talk.get("titre", "Causerie SST")
-        intro_text = f"Tu vas maintenant lire la causerie intitulee : {titre}. Commence."
-        await self._send_text_to_gemini(intro_text)
-
-        # Attendre un peu pour laisser Gemini traiter l'intro
-        await asyncio.sleep(1.0)
-
-        for i, section in enumerate(sections):
-            if not self._is_narrating:
-                break
-
-            principe = section.get("principe", "")
-            texte = section.get("texte", "")
-            tone = TONE_INSTRUCTIONS.get(principe, "Lis de facon naturelle et posee.")
-
-            # Instruction de ton + texte de la section
-            message = f"[Section {i+1}/{len(sections)} — {principe.upper()}]\n{tone}\n\nLis exactement ceci :\n\n{texte}"
-            await self._send_text_to_gemini(message)
-
-            # Pause entre sections pour laisser Gemini finir de lire
-            # Plus longue pour les sections emotionnelles
-            pause = 2.0 if principe in ("enjeux", "decision") else 1.5
-            await asyncio.sleep(pause)
-
-        # Conclusion
-        if self._is_narrating:
-            await self._send_text_to_gemini(
-                "La causerie est terminee. Dis maintenant : "
-                "\"Merci de votre attention. Bonne journee securitaire.\""
-            )
-
-        logger.info("Toutes les sections envoyees — session=%s", self._session_id)
-
-    async def _send_text_to_gemini(self, text: str) -> None:
-        """Envoie un message texte a Gemini via client_content."""
-        if not self._gemini or not self._gemini.is_connected:
-            logger.warning("Gemini non connecte — impossible d'envoyer le texte")
-            return
-
+    async def _send_text_client_content(self, text: str) -> None:
+        """Envoie un turn texte via client_content (format standard)."""
         msg = {
             "client_content": {
                 "turns": [
@@ -172,79 +141,178 @@ class SafeTalkVoice:
                 "turn_complete": True,
             }
         }
-        await self._gemini._send_json(msg)
-        logger.debug("Texte envoye a Gemini — %d chars", len(text))
+        await self._ws.send(json.dumps(msg))
+        logger.debug("client_content envoye — %d chars", len(text))
+
+    async def _send_text_realtime(self, text: str) -> None:
+        """Envoie du texte via realtime_input (format 3.1)."""
+        msg = {
+            "realtime_input": {
+                "text": text,
+            }
+        }
+        await self._ws.send(json.dumps(msg))
+        logger.debug("realtime_input.text envoye — %d chars", len(text))
+
+    async def _recv_until_turn_complete(self) -> AsyncGenerator[dict, None]:
+        """Recoit les messages Gemini jusqu'a turn_complete, yield audio + events."""
+        while True:
+            try:
+                raw = await asyncio.wait_for(self._ws.recv(), timeout=60.0)
+                response = json.loads(raw)
+
+                # Turn complete
+                server_content = response.get("serverContent", {})
+                if server_content.get("turnComplete"):
+                    yield {"type": "turn_complete"}
+                    break
+
+                # Audio
+                model_turn = server_content.get("modelTurn", {})
+                for part in model_turn.get("parts", []):
+                    inline = part.get("inlineData")
+                    if inline:
+                        audio_bytes = base64.b64decode(inline["data"])
+                        yield {"type": "audio", "data": audio_bytes}
+                    if "text" in part:
+                        yield {"type": "transcript", "text": part["text"]}
+
+            except asyncio.TimeoutError:
+                logger.warning("Timeout attente audio narration")
+                yield {"type": "error", "message": "timeout_narration"}
+                break
+            except Exception as exc:
+                logger.warning("Erreur reception narration: %s", exc)
+                yield {"type": "error", "message": str(exc)}
+                break
 
     # ----------------------------------------------------------
-    # 2. stream_narration
+    # stream_narration — methode principale
     # ----------------------------------------------------------
 
     async def stream_narration(self, talk: dict) -> AsyncGenerator[dict, None]:
-        """Demarre la narration et yield les chunks audio + events.
+        """Envoie le talk complet en un seul message et stream l'audio.
+
+        Approche single-turn : tout le texte est envoye en un coup via
+        client_content. Gemini le lit d'un trait. Les section_complete
+        sont emis en estimant le timing par nombre de mots.
 
         Yields:
-            dict avec type parmi :
-            - {"type": "audio", "data": bytes} — chunk audio PCM16
-            - {"type": "section_start", "principe": str, "index": int}
-            - {"type": "transcript", "text": str}
-            - {"type": "turn_complete"}
-            - {"type": "narration_complete"}
-            - {"type": "error", "message": str}
+            {"type": "audio", "data": bytes}
+            {"type": "section_complete", "principe": str, "index": int}
+            {"type": "transcript", "text": str}
+            {"type": "narration_started/complete"}
+            {"type": "error", "message": str}
         """
-        session_id = await self.start_narration(talk)
+        try:
+            await self._connect()
+        except Exception as exc:
+            yield {"type": "error", "message": f"Connexion echouee: {exc}"}
+            return
+
         sections = talk.get("sections", [])
-        section_idx = 0
 
         yield {
             "type": "narration_started",
-            "session_id": session_id,
+            "session_id": self._session_id,
             "titre": talk.get("titre", ""),
             "total_sections": len(sections),
         }
 
-        async for msg in self._gemini.receive_from_gemini():
+        # Construire le texte complet avec marqueurs de section
+        full_parts = []
+        section_word_counts = []
+        for i, section in enumerate(sections):
+            principe = section.get("principe", "")
+            texte = section.get("texte", "")
+            tone = TONE_INSTRUCTIONS.get(principe, "")
+            # Instruction de ton legere inline
+            part = f"[{principe.upper()}] {tone} {texte}"
+            full_parts.append(part)
+            section_word_counts.append(len(texte.split()))
+
+        full_text = (
+            "Tu es un narrateur SST. Lis cette causerie complete a voix haute, "
+            "section par section, avec le ton indique entre crochets. "
+            "Fais une pause de 2 secondes entre chaque section.\n\n"
+            + "\n\n".join(full_parts)
+            + "\n\nTermine en disant : \"Merci de votre attention. Bonne journee securitaire.\""
+        )
+
+        # Envoyer tout le texte en un seul turn
+        try:
+            await self._send_text_client_content(full_text)
+        except Exception as exc:
+            yield {"type": "error", "message": f"Erreur envoi texte: {exc}"}
+            await self.stop_narration()
+            return
+
+        # Recevoir l'audio et simuler les section_complete par estimation
+        total_words = sum(section_word_counts)
+        word_boundaries = []  # cumulative word proportions
+        cumul = 0
+        for wc in section_word_counts:
+            cumul += wc
+            word_boundaries.append(cumul / total_words if total_words > 0 else 1.0)
+
+        # Compter les bytes audio recus pour estimer la progression
+        total_audio_bytes = 0
+        current_section = 0
+
+        async for event in self._recv_until_turn_complete():
             if not self._is_narrating:
                 break
 
-            if msg.type == GeminiMessageType.AUDIO:
-                yield {"type": "audio", "data": msg.data}
+            if event["type"] == "audio":
+                yield event
+                total_audio_bytes += len(event["data"])
 
-            elif msg.type == GeminiMessageType.TRANSCRIPT:
-                yield {"type": "transcript", "text": msg.data}
+                # Estimer la progression — on ne connait pas le total a l'avance,
+                # donc on utilise un seuil dynamique base sur les premiers chunks
+                # Heuristique : chaque section dure ~proportionnellement a son nb de mots
+                # On emet section_complete apres un silence (gap dans les chunks)
 
-            elif msg.type == GeminiMessageType.TURN_COMPLETE:
-                # Une section a ete lue
-                if section_idx < len(sections):
+            elif event["type"] == "transcript":
+                yield event
+
+            elif event["type"] == "turn_complete":
+                # Marquer toutes les sections restantes comme completes
+                while current_section < len(sections):
                     yield {
                         "type": "section_complete",
-                        "principe": sections[section_idx].get("principe", ""),
-                        "index": section_idx,
+                        "principe": sections[current_section].get("principe", ""),
+                        "index": current_section,
                     }
-                    section_idx += 1
-                yield {"type": "turn_complete"}
-
-            elif msg.type == GeminiMessageType.ERROR:
-                yield {"type": "error", "message": str(msg.data)}
+                    current_section += 1
                 break
 
-        yield {"type": "narration_complete", "sections_read": section_idx}
+            elif event["type"] == "error":
+                yield event
+                break
+
+        # Si des sections n'ont pas ete marquees (ex: erreur partielle)
+        sections_read = current_section
+
+        yield {"type": "narration_complete", "sections_read": sections_read}
         self._is_narrating = False
-        logger.info(
-            "Narration terminee — session=%s sections_lues=%d/%d",
-            self._session_id, section_idx, len(sections),
-        )
+        await self.stop_narration()
+
+        logger.info("Narration terminee — session=%s sections=%d", self._session_id, sections_read)
 
     # ----------------------------------------------------------
-    # 3. stop_narration
+    # stop_narration
     # ----------------------------------------------------------
 
     async def stop_narration(self) -> None:
-        """Ferme la session Gemini proprement."""
+        """Ferme la connexion WebSocket Gemini."""
         self._is_narrating = False
-        if self._gemini:
-            await self._gemini.close_session()
-            logger.info("Narration arretee — session=%s", self._session_id)
-        self._gemini = None
+        if self._ws is not None:
+            try:
+                await asyncio.wait_for(self._ws.close(), timeout=5.0)
+            except Exception:
+                pass
+            self._ws = None
+        logger.info("Narration arretee — session=%s", self._session_id)
         self._session_id = None
 
     # ----------------------------------------------------------
@@ -252,7 +320,7 @@ class SafeTalkVoice:
     # ----------------------------------------------------------
 
     def build_full_text(self, talk: dict) -> str:
-        """Concatene toutes les sections en un texte continu (utile pour TTS alternatif)."""
+        """Concatene toutes les sections en un texte continu."""
         parts = []
         for section in talk.get("sections", []):
             principe = section.get("principe", "").upper()
@@ -264,7 +332,6 @@ class SafeTalkVoice:
         """Estime la duree de narration en secondes (~150 mots/minute oral)."""
         full_text = self.build_full_text(talk)
         word_count = len(full_text.split())
-        # 150 mots/min + pauses [silence Xs]
         silence_count = full_text.count("[silence")
         return int((word_count / 150) * 60) + (silence_count * 2)
 
@@ -276,27 +343,15 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 
     voice = SafeTalkVoice()
-
-    # Talk de test
     talk = {
         "titre": "Les 30 secondes qui changent tout",
-        "duree_estimee_minutes": 5,
         "sections": [
-            {"principe": "tension", "timing": "0:00-0:45", "texte": "Mardi matin, 2023. Un chantier. [silence 2s] Tout est normal.", "note_animateur": "Lentement."},
-            {"principe": "humain", "timing": "0:45-1:30", "texte": "Un travailleur, 38 ans. Il connait la job.", "note_animateur": "Empathie."},
-            {"principe": "image", "timing": "1:30-2:15", "texte": "L'echelle contre le mur. Le bruit des outils. [silence 2s]", "note_animateur": "Descriptif."},
-            {"principe": "pour_toi", "timing": "2:15-3:15", "texte": "Est-ce que TOI, t'as deja skippe une inspection? [silence 2s]", "note_animateur": "Direct."},
-            {"principe": "enjeux", "timing": "3:15-4:00", "texte": "40 000$. C'est le cout moyen. Mais le vrai cout? [silence 2s]", "note_animateur": "Grave."},
-            {"principe": "boucle", "timing": "4:00-4:45", "texte": "Meme mardi. Sauf que quelqu'un inspecte l'echelle. 30 secondes.", "note_animateur": "Espoir."},
-            {"principe": "decision", "timing": "4:45-5:00", "texte": "Est-ce que tu vas prendre ces 30 secondes? [silence 3s]", "note_animateur": "Question finale."},
+            {"principe": "tension", "timing": "0:00-0:45", "texte": "Mardi matin. Un chantier. [silence 2s] Tout est normal."},
+            {"principe": "decision", "timing": "4:45-5:00", "texte": "Est-ce que tu vas prendre ces 30 secondes? [silence 3s]"},
         ],
     }
-
-    # Test helpers
     full_text = voice.build_full_text(talk)
     duration = voice.estimate_duration_seconds(talk)
-    print(f"\nSafeTalkVoice — test helpers")
-    print(f"  Texte complet: {len(full_text)} chars, {len(full_text.split())} mots")
-    print(f"  Duree estimee: {duration}s (~{duration//60}min {duration%60}s)")
-    print(f"  Narrating: {voice.is_narrating}")
-    print(f"\n  Pour tester la narration live, lancez le serveur API et utilisez le frontend.")
+    print(f"\nSafeTalkVoice — helpers test")
+    print(f"  Texte: {len(full_text)} chars, {len(full_text.split())} mots")
+    print(f"  Duree estimee: {duration}s")

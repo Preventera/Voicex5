@@ -30,6 +30,13 @@ from voice.gemini_live_service import GeminiMessageType
 from voice.voice_config import GEMINI_API_KEY, VoiceSessionCreate, VoiceSessionResponse
 from voice.voice_quiz_agent import VoiceQuizAgent
 
+try:
+    from safetalk.api_safetalk import router as safetalk_router, _generated_talks
+    from safetalk.safetalk_voice import SafeTalkVoice
+    _safetalk_available = True
+except ImportError:
+    _safetalk_available = False
+
 load_dotenv()
 
 # ============================================================
@@ -160,9 +167,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Integrer SafeTalkX5 si disponible
+if _safetalk_available:
+    app.include_router(safetalk_router)
+    logger.info("SafeTalkX5 router integre — /api/safetalk/*")
+else:
+    logger.warning("SafeTalkX5 non disponible — module safetalk non trouve")
+
 
 # ============================================================
-# 2. WebSocket endpoint — /ws/voice/quiz
+# 2a. WebSocket endpoint — /ws/safetalk/narrate
+# ============================================================
+
+if _safetalk_available:
+    @app.websocket("/ws/safetalk/narrate")
+    async def ws_safetalk_narrate(websocket: WebSocket):
+        """WebSocket narration vocale SafeTalkX5.
+
+        Client envoie JSON init avec talk_id ou talk complet.
+        Serveur stream audio Gemini Live + events section_complete.
+        """
+        await websocket.accept()
+        voice: Optional[SafeTalkVoice] = None
+
+        try:
+            raw_init = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            init_msg = json.loads(raw_init)
+
+            # Recuperer le talk par ID ou depuis le message directement
+            talk_id = init_msg.get("talk_id")
+            talk = None
+            if talk_id and talk_id in _generated_talks:
+                talk = _generated_talks[talk_id]
+            elif "sections" in init_msg:
+                talk = init_msg
+            else:
+                await websocket.send_json({"type": "error", "message": f"Talk non trouve: {talk_id}"})
+                return
+
+            voice = SafeTalkVoice()
+
+            await websocket.send_json({
+                "type": "narration_starting",
+                "talk_id": talk_id or "inline",
+                "titre": talk.get("titre", ""),
+                "sections": len(talk.get("sections", [])),
+            })
+
+            async for event in voice.stream_narration(talk):
+                if event["type"] == "audio":
+                    await websocket.send_bytes(event["data"])
+                else:
+                    await websocket.send_json(event)
+
+        except WebSocketDisconnect:
+            logger.info("Client narration SafeTalk deconnecte")
+        except asyncio.TimeoutError:
+            logger.warning("Timeout init narration SafeTalk")
+        except Exception as exc:
+            logger.error("Erreur narration SafeTalk WS: %s", exc, exc_info=True)
+            try:
+                await websocket.send_json({"type": "error", "message": str(exc)})
+            except Exception:
+                pass
+        finally:
+            if voice:
+                await voice.stop_narration()
+
+
+# ============================================================
+# 2b. WebSocket endpoint — /ws/voice/quiz
 # ============================================================
 
 @app.websocket("/ws/voice/quiz")

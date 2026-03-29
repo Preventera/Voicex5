@@ -230,45 +230,114 @@
     // ============================================================
     // SCREEN 2 — TALK TIMELINE + AUDIO
     // ============================================================
-    function TalkScreen({ talk, onBack, onRestart }) {
+    // ============================================================
+    // SpeechSynthesis narration engine
+    // ============================================================
+    function useSpeechNarration(sections) {
       const [activeSection, setActiveSection] = useState(-1);
       const [isPlaying, setIsPlaying] = useState(false);
       const [isPaused, setIsPaused] = useState(false);
-      const wsRef = useRef(null);
-      const audioRef = useRef(new AudioEngine());
+      const utteranceRef = useRef(null);
+      const queueRef = useRef([]);
+      const currentIdxRef = useRef(-1);
+      const cancelledRef = useRef(false);
 
+      const getFrenchVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        return voices.find(v => v.lang === "fr-CA") ||
+               voices.find(v => v.lang.startsWith("fr")) ||
+               voices[0] || null;
+      };
+
+      const speakSection = (idx) => {
+        if (cancelledRef.current || idx >= sections.length) {
+          setIsPlaying(false);
+          setActiveSection(sections.length);
+          return;
+        }
+        currentIdxRef.current = idx;
+        setActiveSection(idx);
+
+        const section = sections[idx];
+        let text = section.texte || "";
+
+        // Replace [silence Xs] with actual pauses via splitting
+        const parts = text.split(/\[silence\s*(\d+)s?\]/i);
+
+        const speakParts = (partIdx) => {
+          if (cancelledRef.current) return;
+          if (partIdx >= parts.length) {
+            // Section done — next section after a brief pause
+            setTimeout(() => speakSection(idx + 1), 800);
+            return;
+          }
+
+          const part = parts[partIdx];
+          if (partIdx % 2 === 1) {
+            // This is a captured pause duration
+            const pauseMs = parseInt(part, 10) * 1000 || 2000;
+            setTimeout(() => speakParts(partIdx + 1), pauseMs);
+            return;
+          }
+
+          const trimmed = part.trim();
+          if (!trimmed) { speakParts(partIdx + 1); return; }
+
+          const utt = new SpeechSynthesisUtterance(trimmed);
+          utteranceRef.current = utt;
+          const voice = getFrenchVoice();
+          if (voice) utt.voice = voice;
+          utt.lang = "fr-CA";
+          utt.rate = 0.9;
+          utt.pitch = 1.0;
+          utt.onend = () => { if (!cancelledRef.current) speakParts(partIdx + 1); };
+          utt.onerror = (e) => { if (e.error !== "canceled") speakParts(partIdx + 1); };
+          window.speechSynthesis.speak(utt);
+        };
+
+        speakParts(0);
+      };
+
+      const play = () => {
+        if (isPlaying) return;
+        cancelledRef.current = false;
+        setIsPlaying(true);
+        setIsPaused(false);
+        // Ensure voices are loaded
+        if (window.speechSynthesis.getVoices().length === 0) {
+          window.speechSynthesis.onvoiceschanged = () => speakSection(0);
+        } else {
+          speakSection(0);
+        }
+      };
+
+      const pause = () => {
+        if (isPaused) {
+          window.speechSynthesis.resume();
+          setIsPaused(false);
+        } else {
+          window.speechSynthesis.pause();
+          setIsPaused(true);
+        }
+      };
+
+      const stop = () => {
+        cancelledRef.current = true;
+        window.speechSynthesis.cancel();
+        setIsPlaying(false);
+        setIsPaused(false);
+        setActiveSection(-1);
+      };
+
+      return { activeSection, isPlaying, isPaused, play, pause, stop };
+    }
+
+    function TalkScreen({ talk, onBack, onRestart }) {
       const sections = talk.sections || [];
       const titre = talk.titre || "Causerie SST";
       const secteur = talk.secteur || "";
-      const talkId = talk.talk_id || "";
 
-      const handlePlay = () => {
-        if (isPlaying) return;
-        setIsPlaying(true); setActiveSection(0);
-        const ws = new WebSocket(`${WS_BASE}/ws/safetalk/narrate`);
-        wsRef.current = ws;
-        ws.onopen = () => { ws.send(JSON.stringify({ talk_id: talkId })); };
-        ws.onmessage = (evt) => {
-          if (evt.data instanceof Blob) {
-            evt.data.arrayBuffer().then(buf => audioRef.current.enqueue(buf));
-          } else {
-            try {
-              const msg = JSON.parse(evt.data);
-              if (msg.type === "section_complete") setActiveSection(prev => prev + 1);
-              if (msg.type === "narration_complete") { setIsPlaying(false); setActiveSection(sections.length); }
-              if (msg.type === "error") { console.error("Narration error:", msg.message); setIsPlaying(false); }
-            } catch(e) {}
-          }
-        };
-        ws.onclose = () => { setIsPlaying(false); };
-        ws.onerror = () => { setIsPlaying(false); };
-      };
-
-      const handleStop = () => {
-        if (wsRef.current) { try { wsRef.current.close(); } catch(e){} wsRef.current = null; }
-        audioRef.current.stop();
-        setIsPlaying(false); setActiveSection(-1);
-      };
+      const narration = useSpeechNarration(sections);
 
       const handleCopy = () => {
         const text = sections.map(s => `[${s.principe?.toUpperCase()}]\n${s.texte}`).join("\n\n");

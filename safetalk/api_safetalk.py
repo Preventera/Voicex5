@@ -208,68 +208,9 @@ async def generate_and_narrate(body: dict):
 
 # ----------------------------------------------------------
 # 3. WebSocket /ws/safetalk/narrate
+# NOTE: Le handler WebSocket est defini dans voice/api_voice.py
+# car les WebSocket via APIRouter.include_router causent des 403.
 # ----------------------------------------------------------
-
-@router.websocket("/narrate")
-async def ws_narrate(websocket: WebSocket):
-    """WebSocket de narration vocale.
-
-    Le client envoie un JSON init avec talk_id.
-    Le serveur stream l'audio Gemini Live section par section.
-    """
-    await websocket.accept()
-    voice: Optional[SafeTalkVoice] = None
-
-    try:
-        # Phase 1 : Init — recevoir talk_id
-        raw_init = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-        init_msg = json.loads(raw_init)
-        talk_id = init_msg.get("talk_id")
-
-        if not talk_id or talk_id not in _generated_talks:
-            await websocket.send_json({"type": "error", "message": f"Talk non trouve: {talk_id}"})
-            return
-
-        talk = _generated_talks[talk_id]
-
-        # Phase 2 : Demarrer la narration
-        voice = SafeTalkVoice()
-        _stats["narrations_started"] += 1
-
-        await websocket.send_json({
-            "type": "narration_starting",
-            "talk_id": talk_id,
-            "titre": talk.get("titre", ""),
-            "sections": len(talk.get("sections", [])),
-        })
-
-        # Phase 3 : Stream audio + events
-        async for event in voice.stream_narration(talk):
-            if event["type"] == "audio":
-                await websocket.send_bytes(event["data"])
-            else:
-                await websocket.send_json(event)
-
-    except WebSocketDisconnect:
-        logger.info("Client narration deconnecte")
-
-    except asyncio.TimeoutError:
-        logger.warning("Timeout init narration")
-        try:
-            await websocket.send_json({"type": "error", "message": "Timeout: envoyez {talk_id} dans 30s"})
-        except Exception:
-            pass
-
-    except Exception as exc:
-        logger.error("Erreur narration WS: %s", exc, exc_info=True)
-        try:
-            await websocket.send_json({"type": "error", "message": str(exc)})
-        except Exception:
-            pass
-
-    finally:
-        if voice:
-            await voice.stop_narration()
 
 
 # ----------------------------------------------------------
