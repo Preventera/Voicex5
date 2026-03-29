@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="fr-CA">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeTalkX5 — Causeries SST Vocales</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['"DM Sans"', 'system-ui', 'sans-serif'] },
+          colors: {
+            st: { bg: '#0a0f1a', card: '#111827', accent: '#f97316', blue: '#3b82f6', surface: '#1f2937' }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    body { background: #0a0f1a; color: #e2e8f0; font-family: 'DM Sans', system-ui, sans-serif; margin: 0; }
+    @keyframes fade-in { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+    .fade-in { animation: fade-in .4s ease-out; }
+    @keyframes pulse-accent { 0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,.4)} 50%{box-shadow:0 0 0 12px rgba(249,115,22,0)} }
+    .pulse-accent { animation: pulse-accent 2s ease-in-out infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .spin { animation: spin .8s linear infinite; }
+    ::-webkit-scrollbar { width:6px } ::-webkit-scrollbar-track { background:#111827 } ::-webkit-scrollbar-thumb { background:#374151; border-radius:3px }
+    .timeline-line { position:absolute; left:19px; top:0; bottom:0; width:2px; background:#1f2937; }
+    .section-active .timeline-dot { background:#f97316 !important; box-shadow:0 0 0 4px rgba(249,115,22,.3); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    const API_BASE = "http://localhost:8003";
+    const WS_BASE = "ws://localhost:8003";
+    const PLAYBACK_RATE = 24000;
+
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    const PRINCIPE_META = {
+      tension:      { icon: "\uD83D\uDD34", label: "Tension", color: "#ef4444" },
+      humain:       { icon: "\uD83D\uDC64", label: "Humain", color: "#8b5cf6" },
+      image:        { icon: "\uD83C\uDFAC", label: "Image", color: "#06b6d4" },
+      pour_toi:     { icon: "\uD83C\uDFAF", label: "Pour toi", color: "#f97316" },
+      enjeux:       { icon: "\u26A0\uFE0F", label: "Enjeux", color: "#eab308" },
+      boucle:       { icon: "\uD83D\uDD04", label: "Boucle", color: "#10b981" },
+      decision:     { icon: "\u2705",       label: "Decision", color: "#22c55e" },
+      epilogue_ia:  { icon: "\uD83E\uDD16", label: "Epilogue IA", color: "#3b82f6" },
+    };
+
+    // ============================================================
+    // AUDIO ENGINE (reused from voice-quiz-demo)
+    // ============================================================
+    class AudioEngine {
+      constructor() { this.ctx = null; this.queue = []; this.playing = false; }
+      enqueue(pcm16Buf) { this.queue.push(pcm16Buf); if (!this.playing) this._next(); }
+      async _next() {
+        if (!this.queue.length) { this.playing = false; return; }
+        this.playing = true;
+        if (!this.ctx) this.ctx = new AudioContext({ sampleRate: PLAYBACK_RATE });
+        const raw = this.queue.shift();
+        const i16 = new Int16Array(raw);
+        const f32 = new Float32Array(i16.length);
+        for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 0x8000;
+        const buf = this.ctx.createBuffer(1, f32.length, PLAYBACK_RATE);
+        buf.getChannelData(0).set(f32);
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf; src.connect(this.ctx.destination);
+        src.onended = () => this._next(); src.start();
+      }
+      stop() { this.queue = []; this.playing = false; }
+    }
+
+    // ============================================================
+    // ICONS
+    // ============================================================
+    const SpinnerSVG = ({size=20}) => (
+      <svg className="spin" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 2v4"/><path d="M12 18v4" opacity=".3"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83" opacity=".3"/>
+        <path d="M2 12h4"/><path d="M18 12h4" opacity=".3"/><path d="M4.93 19.07l2.83-2.83" opacity=".5"/><path d="M16.24 7.76l2.83-2.83" opacity=".5"/>
+      </svg>
+    );
+
+    // ============================================================
+    // SCREEN 1 — SELECTION
+    // ============================================================
+    function SelectionScreen({ onGenerate }) {
+      const [sectors, setSectors] = useState([]);
+      const [riskTypes, setRiskTypes] = useState([]);
+      const [stats, setStats] = useState(null);
+      const [secteur, setSecteur] = useState("");
+      const [risk, setRisk] = useState("");
+      const [mode, setMode] = useState("sst_pur");
+      const [duree, setDuree] = useState(5);
+      const [langue, setLangue] = useState("fr");
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        fetch(`${API_BASE}/api/safetalk/sectors`).then(r=>r.json()).then(d=>setSectors(d.sectors||[])).catch(()=>{});
+        fetch(`${API_BASE}/api/safetalk/risk-types`).then(r=>r.json()).then(d=>setRiskTypes(d.risk_types||[])).catch(()=>{});
+        fetch(`${API_BASE}/api/safetalk/stats`).then(r=>r.json()).then(d=>setStats(d)).catch(()=>{});
+      }, []);
+
+      const handleGenerate = async () => {
+        setLoading(true); setError(null);
+        try {
+          const resp = await fetch(`${API_BASE}/api/safetalk/generate`, {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ secteur_scian: secteur || undefined, risk_type: risk || undefined, mode, duree_minutes: duree, langue, source: "auto", role_animateur: "superviseur" }),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const talk = await resp.json();
+          if (talk.error) throw new Error(talk.error);
+          onGenerate(talk);
+        } catch(e) { setError(e.message); }
+        finally { setLoading(false); }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="max-w-xl w-full fade-in space-y-5">
+            {/* Header */}
+            <div className="text-center mb-2">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-st-accent/20 mb-3">
+                <span className="text-3xl">{"\uD83C\uDFA4"}</span>
+              </div>
+              <h1 className="text-3xl font-bold">SafeTalk<span className="text-st-accent">X5</span></h1>
+              <p className="text-slate-400 text-sm mt-2 max-w-md mx-auto leading-relaxed">
+                Chaque accident a une histoire. Raconte-la avant qu'elle se repete.
+              </p>
+            </div>
+
+            {/* Form */}
+            <div className="bg-st-card rounded-2xl p-5 border border-gray-800 space-y-4">
+              {/* Secteur */}
+              <div>
+                <label className="block text-sm text-slate-400 mb-1.5">Secteur SCIAN</label>
+                <select value={secteur} onChange={e=>setSecteur(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg bg-st-bg border border-gray-700 text-white focus:border-st-accent focus:outline-none transition">
+                  <option value="">Tous les secteurs</option>
+                  {sectors.map(s => <option key={s.code} value={s.code}>{s.nom} ({s.nb_incidents})</option>)}
+                </select>
+              </div>
+
+              {/* Risque */}
+              <div>
+                <label className="block text-sm text-slate-400 mb-1.5">Type de risque</label>
+                <select value={risk} onChange={e=>setRisk(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg bg-st-bg border border-gray-700 text-white focus:border-st-accent focus:outline-none transition">
+                  <option value="">Tous les risques</option>
+                  {riskTypes.filter(r=>r.available).map(r => <option key={r.type} value={r.type}>{r.label} ({r.count})</option>)}
+                </select>
+              </div>
+
+              {/* Mode */}
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">Mode</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={()=>setMode("sst_pur")}
+                    className={`p-3 rounded-xl border text-left transition ${mode==="sst_pur" ? "border-st-accent bg-st-accent/10" : "border-gray-700 bg-st-bg hover:border-gray-600"}`}>
+                    <span className="text-lg">{"\uD83E\uDDBA"}</span>
+                    <p className="text-sm font-semibold mt-1">SST Pur</p>
+                    <p className="text-xs text-slate-500">Accident reel, storytelling terrain</p>
+                  </button>
+                  <button onClick={()=>setMode("ia_sst")}
+                    className={`p-3 rounded-xl border text-left transition ${mode==="ia_sst" ? "border-st-blue bg-st-blue/10" : "border-gray-700 bg-st-bg hover:border-gray-600"}`}>
+                    <span className="text-lg">{"\uD83E\uDD16"}</span>
+                    <p className="text-sm font-semibold mt-1">IA x SST</p>
+                    <p className="text-xs text-slate-500">+ comment l'IA aurait prevenu</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Duree + Langue */}
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="block text-sm text-slate-400 mb-2">Duree</label>
+                  <div className="flex gap-2">
+                    {[5,7,10].map(d => (
+                      <button key={d} onClick={()=>setDuree(d)}
+                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${duree===d ? "bg-st-accent text-white" : "bg-st-bg border border-gray-700 text-slate-400 hover:border-gray-600"}`}>
+                        {d} min
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="w-28">
+                  <label className="block text-sm text-slate-400 mb-2">Langue</label>
+                  <div className="flex gap-2">
+                    {["fr","en"].map(l => (
+                      <button key={l} onClick={()=>setLangue(l)}
+                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${langue===l ? "bg-st-accent text-white" : "bg-st-bg border border-gray-700 text-slate-400 hover:border-gray-600"}`}>
+                        {l.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Error */}
+              {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+
+              {/* Generate */}
+              <button onClick={handleGenerate} disabled={loading}
+                className="w-full py-3.5 rounded-xl bg-st-accent text-white font-bold text-lg hover:bg-orange-600 disabled:opacity-50 transition flex items-center justify-center gap-2">
+                {loading ? <><SpinnerSVG size={22}/> Generation en cours...</> : <><span>{"\uD83C\uDFA4"}</span> Generer ma causerie</>}
+              </button>
+            </div>
+
+            {/* Stats */}
+            {stats && (
+              <p className="text-center text-xs text-slate-600">
+                {stats.cnesst_records} incidents analyses &middot; {stats.sectors_available} secteurs &middot; {stats.risk_types_available} types de risques
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // SCREEN 2 — TALK TIMELINE + AUDIO
+    // ============================================================
+    function TalkScreen({ talk, onBack, onRestart }) {
+      const [activeSection, setActiveSection] = useState(-1);
+      const [isPlaying, setIsPlaying] = useState(false);
+      const [isPaused, setIsPaused] = useState(false);
+      const wsRef = useRef(null);
+      const audioRef = useRef(new AudioEngine());
+
+      const sections = talk.sections || [];
+      const titre = talk.titre || "Causerie SST";
+      const secteur = talk.secteur || "";
+      const talkId = talk.talk_id || "";
+
+      const handlePlay = () => {
+        if (isPlaying) return;
+        setIsPlaying(true); setActiveSection(0);
+        const ws = new WebSocket(`${WS_BASE}/ws/safetalk/narrate`);
+        wsRef.current = ws;
+        ws.onopen = () => { ws.send(JSON.stringify({ talk_id: talkId })); };
+        ws.onmessage = (evt) => {
+          if (evt.data instanceof Blob) {
+            evt.data.arrayBuffer().then(buf => audioRef.current.enqueue(buf));
+          } else {
+            try {
+              const msg = JSON.parse(evt.data);
+              if (msg.type === "section_complete") setActiveSection(prev => prev + 1);
+              if (msg.type === "narration_complete") { setIsPlaying(false); setActiveSection(sections.length); }
+              if (msg.type === "error") { console.error("Narration error:", msg.message); setIsPlaying(false); }
+            } catch(e) {}
+          }
+        };
+        ws.onclose = () => { setIsPlaying(false); };
+        ws.onerror = () => { setIsPlaying(false); };
+      };
+
+      const handleStop = () => {
+        if (wsRef.current) { try { wsRef.current.close(); } catch(e){} wsRef.current = null; }
+        audioRef.current.stop();
+        setIsPlaying(false); setActiveSection(-1);
+      };
+
+      const handleCopy = () => {
+        const text = sections.map(s => `[${s.principe?.toUpperCase()}]\n${s.texte}`).join("\n\n");
+        navigator.clipboard.writeText(text).catch(()=>{});
+      };
+
+      return (
+        <div className="min-h-screen p-4 max-w-2xl mx-auto fade-in">
+          {/* Header */}
+          <div className="mb-4">
+            <button onClick={onBack} className="text-slate-500 hover:text-slate-300 text-sm mb-2 flex items-center gap-1">
+              &larr; Retour
+            </button>
+            <h2 className="text-xl font-bold">{titre}</h2>
+            <div className="flex gap-3 mt-1 text-xs text-slate-500">
+              <span className="px-2 py-0.5 rounded bg-st-surface">{secteur}</span>
+              <span className="px-2 py-0.5 rounded bg-st-surface">{talk.duree_estimee_minutes || 5} min</span>
+              {talk.config?.mode === "ia_sst" && <span className="px-2 py-0.5 rounded bg-st-blue/20 text-st-blue">IA x SST</span>}
+            </div>
+          </div>
+
+          {/* Audio controls */}
+          <div className="flex gap-2 mb-5">
+            {!isPlaying ? (
+              <button onClick={handlePlay}
+                className="flex-1 py-2.5 rounded-xl bg-st-accent text-white font-semibold hover:bg-orange-600 transition flex items-center justify-center gap-2">
+                <span>{"\u25B6"}</span> Ecouter la causerie
+              </button>
+            ) : (
+              <button onClick={handleStop}
+                className="flex-1 py-2.5 rounded-xl border border-red-800 text-red-400 hover:bg-red-900/20 transition flex items-center justify-center gap-2">
+                <span>{"\u23F9"}</span> Arreter
+              </button>
+            )}
+            <button onClick={handleCopy}
+              className="py-2.5 px-4 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm">
+              {"\uD83D\uDCCB"} Copier
+            </button>
+          </div>
+
+          {/* Progress */}
+          {isPlaying && (
+            <div className="mb-4">
+              <div className="flex justify-between text-xs text-slate-500 mb-1">
+                <span>Section {Math.min(activeSection + 1, sections.length)}/{sections.length}</span>
+                <span>{activeSection >= sections.length ? "Termine" : "En cours..."}</span>
+              </div>
+              <div className="h-1.5 bg-st-bg rounded-full overflow-hidden">
+                <div className="h-full bg-st-accent rounded-full transition-all duration-500" style={{width:`${Math.min(((activeSection+1)/sections.length)*100, 100)}%`}}/>
+              </div>
+            </div>
+          )}
+
+          {/* Timeline */}
+          <div className="relative mb-6">
+            <div className="timeline-line"></div>
+            {sections.map((s, i) => {
+              const meta = PRINCIPE_META[s.principe] || { icon: "\u25CF", label: s.principe, color: "#94a3b8" };
+              const isActive = isPlaying && i === activeSection;
+              const isDone = i < activeSection;
+              return (
+                <div key={i} className={`relative pl-12 pb-5 ${isActive ? "section-active" : ""}`}>
+                  {/* Dot */}
+                  <div className={`timeline-dot absolute left-2.5 w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs transition-all ${
+                    isActive ? "border-st-accent bg-st-accent" : isDone ? "border-green-600 bg-green-600" : "border-gray-600 bg-st-card"
+                  }`} style={{top: 2}}>
+                    {isDone ? "\u2713" : ""}
+                  </div>
+
+                  {/* Card */}
+                  <div className={`bg-st-card rounded-xl border p-4 transition-all ${
+                    isActive ? "border-st-accent shadow-lg shadow-st-accent/10" : "border-gray-800"
+                  }`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-base">{meta.icon}</span>
+                      <span className="text-sm font-semibold" style={{color: meta.color}}>{meta.label}</span>
+                      <span className="text-xs text-slate-600 ml-auto">{s.timing}</span>
+                    </div>
+                    <p className="text-sm text-slate-300 leading-relaxed">{s.texte}</p>
+                    {s.note_animateur && (
+                      <p className="text-xs text-slate-600 italic mt-2">{"\u{1F4AC}"} {s.note_animateur}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Summary footer */}
+          <SummarySection talk={talk} onRestart={onRestart} onCopy={handleCopy} onReplay={handlePlay} />
+        </div>
+      );
+    }
+
+    // ============================================================
+    // SCREEN 3 — SUMMARY + EXPORT
+    // ============================================================
+    function SummarySection({ talk, onRestart, onCopy, onReplay }) {
+      return (
+        <div className="space-y-4 pb-8">
+          {/* Reflexe du jour */}
+          {talk.reflexe_du_jour && (
+            <div className="bg-st-accent/10 border border-st-accent/30 rounded-xl p-4 text-center">
+              <p className="text-xs text-st-accent uppercase tracking-wider mb-1">Reflexe du jour</p>
+              <p className="text-lg font-bold text-st-accent">{talk.reflexe_du_jour}</p>
+            </div>
+          )}
+
+          {/* Refs */}
+          {talk.references_reglementaires?.length > 0 && (
+            <div className="bg-st-card rounded-xl border border-gray-800 p-4">
+              <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">References reglementaires</p>
+              <ul className="space-y-1">
+                {talk.references_reglementaires.map((r,i) => (
+                  <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
+                    <span className="text-slate-600 mt-0.5">{"\u00A7"}</span> {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Source */}
+          <div className="flex items-center justify-between text-xs text-slate-600 px-1">
+            <span>Source : {talk.source_incident || "anonymise"}</span>
+            {talk.generation_time_s && <span>Genere en {talk.generation_time_s}s</span>}
+          </div>
+
+          {/* Actions */}
+          <div className="grid grid-cols-3 gap-2">
+            <button onClick={onCopy}
+              className="py-2.5 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm flex items-center justify-center gap-1">
+              {"\uD83D\uDCCB"} Copier
+            </button>
+            <button onClick={onReplay}
+              className="py-2.5 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm flex items-center justify-center gap-1">
+              {"\uD83C\uDFA4"} Reecouter
+            </button>
+            <button onClick={onRestart}
+              className="py-2.5 rounded-xl bg-st-accent/10 border border-st-accent/30 text-st-accent hover:bg-st-accent/20 transition text-sm flex items-center justify-center gap-1">
+              {"\uD83D\uDD04"} Nouvelle
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // APP
+    // ============================================================
+    function App() {
+      const [screen, setScreen] = useState("select");
+      const [talk, setTalk] = useState(null);
+
+      return (
+        <div className="min-h-screen">
+          {screen === "select" && (
+            <SelectionScreen onGenerate={(t) => { setTalk(t); setScreen("talk"); }} />
+          )}
+          {screen === "talk" && talk && (
+            <TalkScreen
+              talk={talk}
+              onBack={() => setScreen("select")}
+              onRestart={() => { setTalk(null); setScreen("select"); }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
