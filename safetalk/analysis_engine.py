@@ -27,59 +27,59 @@ logger = logging.getLogger("safetalkx5.analysis")
 # ============================================================
 AGENT_CAUSAL_RULES: dict[str, dict[str, Any]] = {
     "echelle": {
-        "causes_directes": ["Perte d'equilibre", "Echelle mal positionnee", "Surface glissante"],
-        "causes_profondes": ["Absence d'inspection pre-utilisation", "Formation inadaptee", "Pression de production"],
-        "defenses_absentes": ["Inspection quotidienne echelles", "Formation travail en hauteur", "Systeme anti-chute"],
-        "acte": "Utilisation d'echelle non securisee",
-        "supervision": "Absence de verification des conditions d'utilisation",
+        "causes_directes": ["Perte d'équilibre", "Échelle mal positionnée", "Surface glissante"],
+        "causes_profondes": ["Absence d'inspection pré-utilisation", "Formation inadaptée", "Pression de production"],
+        "defenses_absentes": ["Inspection quotidienne échelles", "Formation travail en hauteur", "Système anti-chute"],
+        "acte": "Utilisation d'échelle non sécurisée",
+        "supervision": "Absence de vérification des conditions d'utilisation",
     },
     "echafaudage": {
         "causes_directes": ["Garde-corps manquant", "Plateforme instable", "Surcharge"],
-        "causes_profondes": ["Montage non conforme", "Pas d'inspection par personne competente", "Sous-traitance mal encadree"],
-        "defenses_absentes": ["Inspection par personne competente", "Plan de montage", "Garde-corps normatifs"],
-        "acte": "Travail sur echafaudage non conforme",
-        "supervision": "Absence de verification de conformite avant utilisation",
+        "causes_profondes": ["Montage non conforme", "Pas d'inspection par personne compétente", "Sous-traitance mal encadrée"],
+        "defenses_absentes": ["Inspection par personne compétente", "Plan de montage", "Garde-corps normatifs"],
+        "acte": "Travail sur échafaudage non conforme",
+        "supervision": "Absence de vérification de conformité avant utilisation",
     },
     "machine": {
-        "causes_directes": ["Protecteur absent ou deplace", "Defaillance mecanique", "Point de coincement expose"],
-        "causes_profondes": ["Programme de cadenassage deficient", "Maintenance preventive insuffisante", "Formation operateur incomplete"],
-        "defenses_absentes": ["Protecteurs fixes conformes", "Procedure de cadenassage", "Bouton d'arret d'urgence accessible"],
-        "acte": "Intervention sur machine non cadenassee",
-        "supervision": "Tolerance a la non-application du cadenassage",
+        "causes_directes": ["Protecteur absent ou déplacé", "Défaillance mécanique", "Point de coincement exposé"],
+        "causes_profondes": ["Programme de cadenassage déficient", "Maintenance préventive insuffisante", "Formation opérateur incomplète"],
+        "defenses_absentes": ["Protecteurs fixes conformes", "Procédure de cadenassage", "Bouton d'arrêt d'urgence accessible"],
+        "acte": "Intervention sur machine non cadenassée",
+        "supervision": "Tolérance à la non-application du cadenassage",
     },
     "vehicule": {
-        "causes_directes": ["Collision", "Renversement", "Coincement entre vehicule et quai"],
+        "causes_directes": ["Collision", "Renversement", "Coincement entre véhicule et quai"],
         "causes_profondes": ["Plan de circulation absent", "Signalisation insuffisante", "Fatigue du conducteur"],
-        "defenses_absentes": ["Plan de circulation", "Cales de roue", "Signaleur designe"],
-        "acte": "Circulation dans zone pietonne non balisee",
-        "supervision": "Absence de gestion de la coactivite vehicules/pietons",
+        "defenses_absentes": ["Plan de circulation", "Cales de roue", "Signaleur désigné"],
+        "acte": "Circulation dans zone piétonne non balisée",
+        "supervision": "Absence de gestion de la coactivité véhicules/piétons",
     },
     "chariot": {
-        "causes_directes": ["Renversement de charge", "Collision avec pieton", "Basculement"],
-        "causes_profondes": ["Operateur non certifie", "Allees encombrees", "Vitesse excessive"],
-        "defenses_absentes": ["Certification operateur", "Allees degagees et balisees", "Limites de vitesse affichees"],
-        "acte": "Operation de chariot sans visibilite adequate",
-        "supervision": "Non-verification des certifications",
+        "causes_directes": ["Renversement de charge", "Collision avec piéton", "Basculement"],
+        "causes_profondes": ["Opérateur non certifié", "Allées encombrées", "Vitesse excessive"],
+        "defenses_absentes": ["Certification opérateur", "Allées dégagées et balisées", "Limites de vitesse affichées"],
+        "acte": "Opération de chariot sans visibilité adéquate",
+        "supervision": "Non-vérification des certifications",
     },
     "produit chimique": {
-        "causes_directes": ["Contact cutane", "Inhalation vapeurs", "Eclaboussure"],
-        "causes_profondes": ["SIMDUT non a jour", "EPI inadequats", "Ventilation insuffisante"],
-        "defenses_absentes": ["Fiches de donnees de securite accessibles", "EPI chimiques adaptes", "Ventilation locale"],
+        "causes_directes": ["Contact cutané", "Inhalation vapeurs", "Éclaboussure"],
+        "causes_profondes": ["SIMDUT non à jour", "EPI inadéquats", "Ventilation insuffisante"],
+        "defenses_absentes": ["Fiches de données de sécurité accessibles", "EPI chimiques adaptés", "Ventilation locale"],
         "acte": "Manipulation sans EPI requis",
         "supervision": "Absence de suivi des formations SIMDUT",
     },
     "bruit": {
-        "causes_directes": ["Exposition prolongee au bruit", "Pics sonores sans protection"],
-        "causes_profondes": ["Cartographie sonore absente", "Programme de conservation auditive deficient"],
-        "defenses_absentes": ["Cartographie du bruit", "Protecteurs auditifs moules", "Rotation des postes"],
+        "causes_directes": ["Exposition prolongée au bruit", "Pics sonores sans protection"],
+        "causes_profondes": ["Cartographie sonore absente", "Programme de conservation auditive déficient"],
+        "defenses_absentes": ["Cartographie du bruit", "Protecteurs auditifs moulés", "Rotation des postes"],
         "acte": "Travail en zone bruyante sans protecteur auditif",
-        "supervision": "Absence de suivi audiometrique",
+        "supervision": "Absence de suivi audiométrique",
     },
     "patient": {
         "causes_directes": ["Mouvement brusque du patient", "Effort de levage excessif", "Agression"],
-        "causes_profondes": ["Manque de personnel", "Equipement de levage insuffisant", "Formation PDSP incomplete"],
-        "defenses_absentes": ["Ratio personnel/patients adequat", "Leve-personne mecanique", "Protocole de comportement agressif"],
-        "acte": "Deplacement de patient sans aide mecanique",
+        "causes_profondes": ["Manque de personnel", "Équipement de levage insuffisant", "Formation PDSP incomplète"],
+        "defenses_absentes": ["Ratio personnel/patients adéquat", "Lève-personne mécanique", "Protocole de comportement agressif"],
+        "acte": "Déplacement de patient sans aide mécanique",
         "supervision": "Non-application du protocole PDSP",
     },
 }
@@ -89,54 +89,54 @@ AGENT_CAUSAL_RULES: dict[str, dict[str, Any]] = {
 # ============================================================
 NATURE_LESION_RULES: dict[str, dict[str, str]] = {
     "fracture": {
-        "danger": "Energie cinetique (chute, impact, ecrasement)",
+        "danger": "Énergie cinétique (chute, impact, écrasement)",
         "evenement_top": "Contact violent avec surface dure ou objet lourd",
-        "signal_faible": "Incidents mineurs de chutes ou quasi-accidents non rapportes",
+        "signal_faible": "Incidents mineurs de chutes ou quasi-accidents non rapportés",
     },
     "entorse": {
-        "danger": "Surcharge biomecanique",
+        "danger": "Surcharge biomécanique",
         "evenement_top": "Mouvement brusque ou effort excessif",
-        "signal_faible": "Douleurs musculaires recurrentes non signalees",
+        "signal_faible": "Douleurs musculaires récurrentes non signalées",
     },
     "amputation": {
-        "danger": "Point de coincement ou de cisaillement expose",
+        "danger": "Point de coincement ou de cisaillement exposé",
         "evenement_top": "Contact avec zone dangereuse de la machine",
-        "signal_faible": "Protecteurs retires ou contournes sans signalement",
+        "signal_faible": "Protecteurs retirés ou contournés sans signalement",
     },
     "coupure": {
         "danger": "Objet tranchant ou surface coupante",
-        "evenement_top": "Contact avec lame, arete ou outil tranchant",
-        "signal_faible": "Premiers soins frequents pour coupures mineures",
+        "evenement_top": "Contact avec lame, arête ou outil tranchant",
+        "signal_faible": "Premiers soins fréquents pour coupures mineures",
     },
     "brulure": {
         "danger": "Source thermique ou chimique",
         "evenement_top": "Contact avec surface chaude, flamme ou produit corrosif",
-        "signal_faible": "Quasi-contacts thermiques ou eclaboussures mineures",
+        "signal_faible": "Quasi-contacts thermiques ou éclaboussures mineures",
     },
     "surdite": {
         "danger": "Niveau sonore excessif continu",
-        "evenement_top": "Exposition prolongee au bruit > 85 dB",
-        "signal_faible": "Acouphenes ou difficulte d'ecoute en fin de quart",
+        "evenement_top": "Exposition prolongée au bruit > 85 dB",
+        "signal_faible": "Acouphènes ou difficulté d'écoute en fin de quart",
     },
     "douleur": {
-        "danger": "Contraintes posturales ou efforts repetitifs",
+        "danger": "Contraintes posturales ou efforts répétitifs",
         "evenement_top": "Surcharge musculosquelettique cumulative",
-        "signal_faible": "Auto-medication et douleurs chroniques banalisees",
+        "signal_faible": "Auto-médication et douleurs chroniques banalisées",
     },
     "troubles psychologiques": {
         "danger": "Facteurs psychosociaux du travail",
-        "evenement_top": "Surcharge emotionnelle ou evenement traumatisant",
-        "signal_faible": "Absenteisme croissant, plaintes informelles repetees",
+        "evenement_top": "Surcharge émotionnelle ou événement traumatisant",
+        "signal_faible": "Absentéisme croissant, plaintes informelles répétées",
     },
     "dermatite": {
         "danger": "Agents chimiques ou biologiques irritants",
-        "evenement_top": "Contact prolonge sans protection cutanee",
-        "signal_faible": "Rougeurs et irritations cutanees mineures repetees",
+        "evenement_top": "Contact prolongé sans protection cutanée",
+        "signal_faible": "Rougeurs et irritations cutanées mineures répétées",
     },
     "intoxication": {
         "danger": "Substances toxiques en suspension ou contact",
         "evenement_top": "Inhalation ou absorption de contaminant",
-        "signal_faible": "Odeurs inhabituelles, maux de tete recurrents au poste",
+        "signal_faible": "Odeurs inhabituelles, maux de tête récurrents au poste",
     },
 }
 
@@ -145,28 +145,28 @@ NATURE_LESION_RULES: dict[str, dict[str, str]] = {
 # ============================================================
 INDICATOR_FACTORS: dict[str, dict[str, Any]] = {
     "tms": {
-        "facteurs_individuels": ["Posture contraignante adoptee", "Technique de levage inadequate"],
-        "facteurs_equipe": ["Pas d'aide disponible pour les charges lourdes", "Cadence de travail collective elevee"],
-        "facteurs_organisationnels": ["Programme d'ergonomie absent", "Rotation des postes non implantee"],
-        "angle_ia": "Un capteur de posture IA ou l'analyse video des gestes repetitifs aurait detecte les risques ergonomiques en temps reel.",
+        "facteurs_individuels": ["Posture contraignante adoptée", "Technique de levage inadéquate"],
+        "facteurs_equipe": ["Pas d'aide disponible pour les charges lourdes", "Cadence de travail collective élevée"],
+        "facteurs_organisationnels": ["Programme d'ergonomie absent", "Rotation des postes non implantée"],
+        "angle_ia": "Un capteur de posture IA ou l'analyse vidéo des gestes répétitifs aurait détecté les risques ergonomiques en temps réel.",
     },
     "machine": {
-        "facteurs_individuels": ["Contournement du protecteur", "Manque de formation specifique machine"],
-        "facteurs_equipe": ["Culture de tolerance au risque machine", "Pression de production collegiale"],
-        "facteurs_organisationnels": ["Programme de cadenassage deficient", "Maintenance preventive sous-financee"],
-        "angle_ia": "Un systeme de vision IA integre a la machine aurait detecte la presence de mains dans la zone dangereuse et arrete automatiquement.",
+        "facteurs_individuels": ["Contournement du protecteur", "Manque de formation spécifique machine"],
+        "facteurs_equipe": ["Culture de tolérance au risque machine", "Pression de production collégiale"],
+        "facteurs_organisationnels": ["Programme de cadenassage déficient", "Maintenance préventive sous-financée"],
+        "angle_ia": "Un système de vision IA intégré à la machine aurait détecté la présence de mains dans la zone dangereuse et arrêté automatiquement.",
     },
     "surdite": {
-        "facteurs_individuels": ["Non-port du protecteur auditif", "Meconnaissance des seuils de risque"],
-        "facteurs_equipe": ["Norme sociale de ne pas porter les protecteurs", "Communication par cris plutot que signaux"],
-        "facteurs_organisationnels": ["Cartographie sonore non realisee", "Equipements bruyants non remplaces"],
-        "angle_ia": "Des dosimetres IA connectes auraient mesure l'exposition cumulee en temps reel et alerte avant le depassement des seuils reglementaires.",
+        "facteurs_individuels": ["Non-port du protecteur auditif", "Méconnaissance des seuils de risque"],
+        "facteurs_equipe": ["Norme sociale de ne pas porter les protecteurs", "Communication par cris plutôt que signaux"],
+        "facteurs_organisationnels": ["Cartographie sonore non réalisée", "Équipements bruyants non remplacés"],
+        "angle_ia": "Des dosimètres IA connectés auraient mesuré l'exposition cumulée en temps réel et alerté avant le dépassement des seuils réglementaires.",
     },
     "psy": {
-        "facteurs_individuels": ["Epuisement emotionnel cumule", "Mecanismes de coping insuffisants"],
-        "facteurs_equipe": ["Climat de travail deteriore", "Absence de soutien entre collegues"],
-        "facteurs_organisationnels": ["Politique de sante psychologique absente", "Charge de travail excessive chronique"],
-        "angle_ia": "Un outil d'analyse du langage IA dans les rapports d'equipe aurait detecte les signaux de detresse collective avant la crise.",
+        "facteurs_individuels": ["Épuisement émotionnel cumulé", "Mécanismes de coping insuffisants"],
+        "facteurs_equipe": ["Climat de travail détérioré", "Absence de soutien entre collègues"],
+        "facteurs_organisationnels": ["Politique de santé psychologique absente", "Charge de travail excessive chronique"],
+        "angle_ia": "Un outil d'analyse du langage IA dans les rapports d'équipe aurait détecté les signaux de détresse collective avant la crise.",
     },
 }
 
@@ -291,10 +291,10 @@ Reponds UNIQUEMENT en JSON :
                 ind_factors["facteurs_organisationnels"].extend(f.get("facteurs_organisationnels", []))
 
         return {
-            "facteurs_individuels": ind_factors["facteurs_individuels"] or ["Connaissance incomplete du risque", "Choix comportemental sous pression"],
-            "facteurs_equipe": ind_factors["facteurs_equipe"] or ["Communication insuffisante sur les risques", "Entraide limitee lors de taches dangereuses"],
-            "facteurs_organisationnels": ind_factors["facteurs_organisationnels"] or ["Evaluation des risques incomplete", "Ressources SST insuffisantes"],
-            "defenses_absentes": rules.get("defenses_absentes", ["Barriere physique", "Procedure ecrite", "Formation specifique"]),
+            "facteurs_individuels": ind_factors["facteurs_individuels"] or ["Connaissance incomplète du risque", "Choix comportemental sous pression"],
+            "facteurs_equipe": ind_factors["facteurs_equipe"] or ["Communication insuffisante sur les risques", "Entraide limitée lors de tâches dangereuses"],
+            "facteurs_organisationnels": ind_factors["facteurs_organisationnels"] or ["Évaluation des risques incomplète", "Ressources SST insuffisantes"],
+            "defenses_absentes": rules.get("defenses_absentes", ["Barrière physique", "Procédure écrite", "Formation spécifique"]),
         }
 
     async def _claude_icam(self, incident: dict) -> dict:
@@ -332,13 +332,13 @@ Reponds UNIQUEMENT en JSON :
         nature_rules = self._match_nature_rules(nature)
 
         return {
-            "danger": nature_rules.get("danger", f"Source de danger liee a {agent}"),
-            "evenement_top": nature_rules.get("evenement_top", f"Contact ou exposition a {agent}"),
-            "barrieres_prevention_absentes": rules.get("defenses_absentes", ["Barriere physique", "Procedure de securite"])[:3],
+            "danger": nature_rules.get("danger", f"Source de danger liée à {agent}"),
+            "evenement_top": nature_rules.get("evenement_top", f"Contact ou exposition à {agent}"),
+            "barrieres_prevention_absentes": rules.get("defenses_absentes", ["Barrière physique", "Procédure de sécurité"])[:3],
             "barrieres_mitigation_absentes": [
-                "Plan d'urgence specifique",
-                "Trousse de premiers soins adaptee",
-                "Formation premiers secours a jour",
+                "Plan d'urgence spécifique",
+                "Trousse de premiers soins adaptée",
+                "Formation premiers secours à jour",
             ],
         }
 
@@ -377,22 +377,22 @@ Reponds UNIQUEMENT en JSON :
         # Conditions precurseurs basees sur la nature
         conditions_map = {
             "fracture": "Environnement physique dangereux (surface, hauteur, encombrement)",
-            "entorse": "Conditions ergonomiques deficientes (posture, charge, repetition)",
-            "amputation": "Etat du materiel deficient (protecteur absent, machine defaillante)",
-            "surdite": "Environnement sonore excessif non controle",
-            "troubles psychologiques": "Climat de travail deteriore et surcharge chronique",
+            "entorse": "Conditions ergonomiques déficientes (posture, charge, répétition)",
+            "amputation": "État du matériel déficient (protecteur absent, machine défaillante)",
+            "surdite": "Environnement sonore excessif non contrôlé",
+            "troubles psychologiques": "Climat de travail détérioré et surcharge chronique",
         }
-        conditions = "Conditions de travail inadequates"
+        conditions = "Conditions de travail inadéquates"
         for key, val in conditions_map.items():
             if key in nature:
                 conditions = val
                 break
 
         return {
-            "acte_non_securitaire": rules.get("acte", f"Action dans un contexte de risque non maitrise ({agent})"),
+            "acte_non_securitaire": rules.get("acte", f"Action dans un contexte de risque non maîtrisé ({agent})"),
             "conditions_precurseurs": conditions,
-            "supervision": rules.get("supervision", "Encadrement insuffisant des pratiques securitaires"),
-            "influences_organisationnelles": "Culture de production priorisee sur la securite; ressources SST sous-dimensionnees",
+            "supervision": rules.get("supervision", "Encadrement insuffisant des pratiques sécuritaires"),
+            "influences_organisationnelles": "Culture de production priorisée sur la sécurité; ressources SST sous-dimensionnées",
         }
 
     async def _claude_hfacs(self, incident: dict) -> dict:
@@ -434,34 +434,34 @@ Reponds UNIQUEMENT en JSON :
         nature_rules = self._match_nature_rules(nature)
 
         # Lecon principale : combiner cause racine ADC + defenses Bow-Tie
-        cause_racine = adc.get("cause_racine", "Deficience organisationnelle")
-        defense_manquante = (bowtie.get("barrieres_prevention_absentes") or ["une barriere de securite"])[0]
-        lecon = f"{cause_racine}. La barriere absente : {defense_manquante}."
+        cause_racine = adc.get("cause_racine", "Déficience organisationnelle")
+        defense_manquante = (bowtie.get("barrieres_prevention_absentes") or ["une barrière de sécurité"])[0]
+        lecon = f"{cause_racine}. La barrière absente : {defense_manquante}."
 
         # Signal faible
-        signal = nature_rules.get("signal_faible", "Des incidents mineurs similaires non rapportes ou banalises")
+        signal = nature_rules.get("signal_faible", "Des incidents mineurs similaires non rapportés ou banalisés")
 
-        # Actions cles : top 3 des defenses absentes + facteurs organisationnels
+        # Actions clés : top 3 des défenses absentes + facteurs organisationnels
         actions_pool = list(bowtie.get("barrieres_prevention_absentes", []))
         for f in icam.get("facteurs_organisationnels", []):
             actions_pool.append(f"Corriger : {f}")
         actions_cles = actions_pool[:3] if actions_pool else [
-            "Realiser une evaluation des risques specifique",
-            "Former les travailleurs sur le danger identifie",
-            "Mettre en place les barrieres de prevention manquantes",
+            "Réaliser une évaluation des risques spécifique",
+            "Former les travailleurs sur le danger identifié",
+            "Mettre en place les barrières de prévention manquantes",
         ]
 
-        # Resonance terrain
+        # Résonance terrain
         groupe_age = incident.get("groupe_age", "")
         resonance = f"Cet accident touche un travailleur {groupe_age} dans le secteur {secteur}."
         if "25-34" in groupe_age or "15-24" in groupe_age:
-            resonance += " Les jeunes travailleurs sont surrepresentes dans ce type d'accident — la formation d'accueil est critique."
+            resonance += " Les jeunes travailleurs sont surreprésentés dans ce type d'accident — la formation d'accueil est critique."
         elif "45-54" in groupe_age or "55-64" in groupe_age:
-            resonance += " Les travailleurs experimentes peuvent developper un faux sentiment de securite — la vigilance ne remplace pas les barrieres."
+            resonance += " Les travailleurs expérimentés peuvent développer un faux sentiment de sécurité — la vigilance ne remplace pas les barrières."
 
         # Angle IA
         indicators = incident.get("indicateurs", {})
-        angle_ia = "L'IA pourrait contribuer a la prevention par la detection precoce de patterns dans les donnees d'incidents."
+        angle_ia = "L'IA pourrait contribuer à la prévention par la détection précoce de patterns dans les données d'incidents."
         for ind_key, ind_val in indicators.items():
             if ind_val and ind_key in INDICATOR_FACTORS:
                 angle_ia = INDICATOR_FACTORS[ind_key].get("angle_ia", angle_ia)

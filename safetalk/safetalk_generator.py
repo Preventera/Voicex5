@@ -14,12 +14,93 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 from typing import Optional
 
 logger = logging.getLogger("safetalkx5.generator")
 
 # ============================================================
-# References reglementaires par type de risque
+# Vocabulaire par secteur SCIAN
+# ============================================================
+SECTOR_VOCABULARY: dict[str, dict[str, str]] = {
+    "23": {
+        "lieu": "chantier", "equipement_typique": "échafaudage, grue, coffrage",
+        "ambiance": "le bruit des marteaux, l'odeur du béton frais, la poussière",
+        "collegue": "les gars de l'équipe", "pause": "break",
+        "debut_journee": "6h45, le van arrive sur le site",
+    },
+    "62": {
+        "lieu": "unité de soins", "equipement_typique": "civière, fauteuil roulant, seringue",
+        "ambiance": "les néons blancs, le bip des moniteurs, l'odeur du désinfectant",
+        "collegue": "l'équipe de soins", "pause": "pause",
+        "debut_journee": "7h00, le changement de quart",
+    },
+    "31-33": {
+        "lieu": "usine", "equipement_typique": "presse, convoyeur, machine CNC",
+        "ambiance": "le vrombissement des machines, l'odeur d'huile de coupe, les lumières jaunes",
+        "collegue": "l'équipe de production", "pause": "break",
+        "debut_journee": "6h30, la sirène du shift",
+    },
+    "21": {
+        "lieu": "mine", "equipement_typique": "foreuse, chargeuse, ventilateur",
+        "ambiance": "le noir du tunnel, le bruit de la ventilation, l'humidité",
+        "collegue": "l'équipe sous terre", "pause": "remontée",
+        "debut_journee": "5h30, la descente au puits",
+    },
+    "48-49": {
+        "lieu": "route", "equipement_typique": "camion, chariot élévateur, remorque",
+        "ambiance": "le diesel, le bruit de la radio CB, les lignes blanches qui défilent",
+        "collegue": "les drivers", "pause": "stop",
+        "debut_journee": "4h30, le truck est déjà chaud",
+    },
+    "11": {
+        "lieu": "ferme", "equipement_typique": "tracteur, moissonneuse, silo",
+        "ambiance": "l'odeur de la terre, le soleil qui tape, le bruit du moteur",
+        "collegue": "les travailleurs saisonniers", "pause": "dîner",
+        "debut_journee": "5h00, les animaux attendent pas",
+    },
+    "44-45": {
+        "lieu": "entrepôt", "equipement_typique": "rack, palette, transpalette",
+        "ambiance": "les allées hautes, le bip du scanner, les portes de quai ouvertes",
+        "collegue": "l'équipe de réception", "pause": "break",
+        "debut_journee": "7h00, le premier camion est déjà au quai",
+    },
+    "56": {
+        "lieu": "bureau", "equipement_typique": "poste de travail, écran, chaise ergonomique",
+        "ambiance": "le ronronnement de la clim, les claviers qui tapent, le café qui coule",
+        "collegue": "les collègues", "pause": "pause café",
+        "debut_journee": "8h30, le meeting du matin",
+    },
+    "72": {
+        "lieu": "cuisine", "equipement_typique": "four, friteuse, couteau de chef",
+        "ambiance": "la chaleur des fourneaux, l'odeur de la friture, les commandes qui rentrent",
+        "collegue": "la brigade", "pause": "service coupé",
+        "debut_journee": "10h00, le prep commence",
+    },
+}
+
+SECTOR_VOCABULARY_DEFAULT = {
+    "lieu": "lieu de travail", "equipement_typique": "équipement",
+    "ambiance": "le bruit ambiant, l'activité normale",
+    "collegue": "les collègues", "pause": "pause",
+    "debut_journee": "le début du quart",
+}
+
+# Risques spécifiques par secteur pour actions concrètes
+SECTOR_ACTIONS: dict[str, list[str]] = {
+    "23": ["vérifier l'ancrage de l'échafaudage", "inspecter le harnais anti-chute", "sécuriser le périmètre de la grue"],
+    "62": ["demander du renfort avant de déplacer le patient", "utiliser le lève-personne mécanique", "vérifier les EPI avant manipulation de produits"],
+    "31-33": ["vérifier que la garde de la machine est en place", "appliquer le cadenassage avant intervention", "porter les protecteurs auditifs"],
+    "21": ["tester l'air avant de descendre", "vérifier l'état du tunnel avant d'avancer", "porter le détecteur de gaz"],
+    "48-49": ["faire le tour du camion avant de reculer", "vérifier les freins avant le départ", "respecter les heures de conduite"],
+    "11": ["vérifier le protecteur de la prise de force", "porter les EPI contre les pesticides", "s'hydrater régulièrement"],
+    "44-45": ["inspecter les racks avant le chargement", "vérifier le chemin du chariot", "ne pas dépasser la capacité de la palette"],
+    "72": ["vérifier que le plancher est sec", "utiliser le gant de protection au couteau", "ne pas remplir la friteuse au-delà de la ligne"],
+}
+
+
+# ============================================================
+# Références réglementaires par type de risque
 # ============================================================
 REFS_REGLEMENTAIRES: dict[str, list[str]] = {
     "chute": [
@@ -338,148 +419,288 @@ class SafeTalkGenerator:
     # ----------------------------------------------------------
 
     def _template_fallback(self, incident: dict, analysis: dict, config: dict) -> dict:
-        """Genere un talk structure sans API Claude."""
+        """Génère un talk structuré sans API Claude — 3 variantes par section, adapté par secteur."""
         mode = config.get("mode", "sst_pur")
         duree = config.get("duree_minutes", 5)
-        role = config.get("role_animateur", "superviseur")
         synthese = analysis.get("synthese", {})
         adc = analysis.get("adc", {})
         bowtie = analysis.get("bowtie", {})
 
         nature = incident.get("nature_lesion", "Blessure")
-        agent = incident.get("agent_causal", "un equipement")
+        agent = incident.get("agent_causal", "un équipement")
         secteur = incident.get("secteur_nom", "le milieu de travail")
+        secteur_code = str(incident.get("secteur_scian", ""))
         age = incident.get("groupe_age", "35-44")
         sexe = incident.get("sexe", "")
         annee = incident.get("annee", 2023)
         genre = incident.get("genre_accident", "")
 
-        pronom = "il" if sexe.lower().startswith("m") else "elle"
-        travailleur = "un travailleur" if sexe.lower().startswith("m") else "une travailleuse"
+        # Vocabulaire sectoriel
+        vocab = SECTOR_VOCABULARY_DEFAULT.copy()
+        for prefix_len in [4, 3, 2]:
+            prefix = secteur_code[:prefix_len]
+            if prefix in SECTOR_VOCABULARY:
+                vocab = SECTOR_VOCABULARY[prefix]
+                break
 
-        signal = synthese.get("signal_faible", "Des incidents mineurs non rapportes")
-        actions = synthese.get("actions_cles", ["Inspecter l'equipement", "Porter les EPI", "Signaler les quasi-accidents"])
-        lecon = synthese.get("lecon_principale", f"Un accident evitable lie a {agent}")
+        lieu = vocab["lieu"]
+        ambiance = vocab["ambiance"]
+        collegues = vocab["collegue"]
+        debut = vocab["debut_journee"]
+
+        # Actions spécifiques au secteur
+        sector_actions = None
+        for prefix_len in [4, 3, 2]:
+            prefix = secteur_code[:prefix_len]
+            if prefix in SECTOR_ACTIONS:
+                sector_actions = SECTOR_ACTIONS[prefix]
+                break
+
+        # Pronoms
+        is_m = sexe.lower().startswith("m") if sexe else True
+        pronom = "il" if is_m else "elle"
+        lui_elle = "lui" if is_m else "elle"
+        travailleur = "un travailleur" if is_m else "une travailleuse"
+        gars_fille = "gars" if is_m else "fille"
+        son_sa = "son" if is_m else "sa"
+
+        default_actions = sector_actions or ["Inspecter l'équipement", "Porter les EPI", "Signaler les quasi-accidents"]
+        actions = synthese.get("actions_cles", default_actions)
+        # Si les actions sont trop génériques, utiliser les actions sectorielles
+        if sector_actions and actions and "évaluation des risques" in actions[0].lower():
+            actions = sector_actions
+        action1 = actions[0] if actions else "une vérification de 30 secondes"
         angle_ia = synthese.get("angle_ia", "")
-        danger = bowtie.get("danger", f"Risque lie a {agent}")
-        cause_racine = adc.get("cause_racine", "Deficience organisationnelle")
         refs = _get_refs(incident)
 
-        sections = [
-            {
-                "principe": "tension",
-                "timing": "0:00-0:45",
-                "texte": (
-                    f"Mardi matin, {annee}. Un chantier comme les votres dans le secteur {secteur}. "
-                    f"L'equipe commence son shift. Cafe, jokes, on se met en route. "
-                    f"Tout est normal. [silence 2s] Sauf que dans moins d'une heure... "
-                    f"rien ne sera plus pareil pour {travailleur} de l'equipe."
-                ),
-                "note_animateur": "Parle lentement. Laisse le silence faire son travail.",
-            },
-            {
-                "principe": "humain",
-                "timing": "0:45-1:30",
-                "texte": (
-                    f"On va l'appeler... mettons, le travailleur. {age} ans. "
-                    f"Ca fait plusieurs annees qu'{pronom} travaille dans le domaine. "
-                    f"{pronom.title()} connait la job. {pronom.title()} a de l'experience. "
-                    f"Peut-etre qu'{pronom} te ressemble. Peut-etre que tu le connais, "
-                    f"quelqu'un comme {pronom}, dans ton equipe."
-                ),
-                "note_animateur": "Regarde les gens dans les yeux. Fais une pause.",
-            },
-            {
-                "principe": "image",
-                "timing": "1:30-2:15",
-                "texte": (
-                    f"Imagine la scene. Le site de travail en {secteur}. "
-                    f"{genre if genre else 'La tache en cours'}. "
-                    f"L'equipement : {agent}. "
-                    f"Le bruit habituel. L'odeur du matin. Les collegues autour. "
-                    f"Pis la... [silence 2s] {nature.lower()}. "
-                    f"En une seconde, tout bascule."
-                ),
-                "note_animateur": "Decris lentement comme si tu racontais un film. Fais-les visualiser.",
-            },
-            {
-                "principe": "pour_toi",
-                "timing": "2:15-3:15",
-                "texte": (
-                    f"Maintenant, je te pose la question. [silence 2s] "
-                    f"Est-ce que TOI, t'as deja travaille avec {agent} en te disant "
-                    f"\"ca va etre correct, j'en ai pour deux minutes\"? "
-                    f"Est-ce que t'as deja vu un collegue skipper une etape de securite "
-                    f"parce que \"ca presse\"? [silence 2s] "
-                    f"On l'a tous fait. C'est pas une question de competence. "
-                    f"C'est une question de moment."
-                ),
-                "note_animateur": "C'est le moment ou tu les interpelles. Laisse-les reflechir. Pas de reponse attendue.",
-            },
-            {
-                "principe": "enjeux",
-                "timing": "3:15-4:00",
-                "texte": (
-                    f"La CNESST rapporte que dans ton secteur, {secteur}, "
-                    f"les accidents comme celui-la arrivent chaque annee. "
-                    f"Le cout moyen d'un accident grave : plus de 40 000$ pour l'employeur. "
-                    f"Mais le vrai cout? [silence 2s] "
-                    f"C'est le collegue qui rentre pas le lendemain. "
-                    f"C'est l'equipe qui se demande ce qui s'est passe. "
-                    f"C'est la famille qui recoit un appel qu'elle esperait jamais recevoir."
-                ),
-                "note_animateur": "Cite les chiffres calmement. Le silence apres est plus fort que les mots.",
-            },
-            {
-                "principe": "boucle",
-                "timing": "4:00-4:45",
-                "texte": (
-                    f"Revenons a mardi matin. Meme chantier. Meme equipe. Meme cafe. "
-                    f"Sauf que cette fois-la, quelqu'un fait UNE chose differente : "
-                    f"{actions[0].lower() if actions else 'une verification de 30 secondes'}. "
-                    f"[silence 2s] Trente secondes. C'est tout ce que ca prenait. "
-                    f"Trente secondes pour que {travailleur} rentre chez {pronom} ce soir-la. "
-                    f"Comme d'habitude."
-                ),
-                "note_animateur": "Reviens au ton calme du debut. La boucle se ferme.",
-            },
-            {
-                "principe": "decision",
-                "timing": "4:45-5:00",
-                "texte": (
-                    f"Aujourd'hui, avant de commencer ta journee, je te demande juste une chose. "
-                    f"[silence 2s] Est-ce que tu vas prendre ces 30 secondes-la? "
-                    f"Oui ou non. C'est tout."
-                ),
-                "note_animateur": "Termine la. Pas de sermon. Pas de morale. La question suffit.",
-            },
+        heures = random.choice(["6h45", "7h15", "8h00", "13h30", "14h00"])
+        jours = random.choice(["Mardi", "Mercredi", "Jeudi", "Vendredi"])
+
+        # --- TENSION ---
+        tension_variants = [
+            (
+                f"{debut}. {collegues.title()} commence le quart. "
+                f"Café, jokes, on se met en route. "
+                f"Tout est normal. [silence 2s] Sauf que dans moins d'une heure, "
+                f"rien ne sera plus pareil pour {travailleur} de l'équipe."
+            ),
+            (
+                f"Personne s'attendait à rien. Un {lieu} en {secteur}, {annee}. "
+                f"Une journée comme les autres. Le genre de journée où tu fais ta routine "
+                f"sans te poser de questions. [silence 2s] "
+                f"C'est exactement ce genre de journée là que ça arrive."
+            ),
+            (
+                f"Le superviseur avait dit : aujourd'hui, on fait attention, "
+                f"on a du retard sur le calendrier. "
+                f"Un {lieu}, {annee}. [silence 2s] "
+                f"À {heures}, les ambulanciers étaient sur place."
+            ),
         ]
 
-        # Ajouter epilogue IA si mode ia_sst
+        # --- HUMAIN ---
+        humain_variants = [
+            (
+                f"On va l'appeler... mettons, le travailleur. {age} ans. "
+                f"Ça fait plusieurs années qu'{pronom} travaille dans le domaine. "
+                f"{pronom.title()} connaît la job. {pronom.title()} a de l'expérience. "
+                f"Peut-être qu'{pronom} te ressemble."
+            ),
+            (
+                f"C'est quelqu'un comme toi. {age} ans, "
+                f"plusieurs années d'expérience dans le domaine. "
+                f"Le genre de personne sur qui {collegues} compte. "
+                f"Fiable. Travaillant. [silence 2s] Humain."
+            ),
+            (
+                f"{age} ans. Deux kids à la maison. "
+                f"Le genre de {gars_fille} qui arrive toujours dix minutes d'avance. "
+                f"Qui dit jamais non quand on {lui_elle} demande un coup de main. "
+                f"[silence 2s] Ce matin-là, {pronom} avait {son_sa} lunch dans le char."
+            ),
+        ]
+
+        # --- IMAGE ---
+        image_variants = [
+            (
+                f"Imagine la scène. Le {lieu}. "
+                f"{genre if genre else 'La tâche en cours'}. "
+                f"L'équipement : {agent}. "
+                f"{ambiance}. "
+                f"[silence 2s] Pis là, {nature.lower()}."
+            ),
+            (
+                f"Ferme les yeux deux secondes. {ambiance.capitalize()}. "
+                f"{agent} en arrière-plan. "
+                f"L'air du matin. [silence 2s] "
+                f"C'est là que tout a changé. {nature}."
+            ),
+            (
+                f"{heures}. Le {lieu}. "
+                f"{agent} est en place. "
+                f"Autour, {collegues} travaille. "
+                f"[silence 2s] Personne a vu venir ce qui allait se passer."
+            ),
+        ]
+
+        # --- POUR TOI ---
+        pour_toi_variants = [
+            (
+                f"Maintenant, je te pose la question. [silence 2s] "
+                f"Est-ce que TOI, t'as déjà travaillé avec {agent} en te disant "
+                f"\"ça va être correct, j'en ai pour deux minutes\"? "
+                f"[silence 2s] On l'a tous fait. C'est pas une question de compétence. "
+                f"C'est une question de moment."
+            ),
+            (
+                f"Lève la main si t'as jamais coupé un coin "
+                f"quand tu travailles avec {agent}. "
+                f"[silence 3s] Personne? C'est ça que je pensais. "
+                f"On le fait tous. Pas par paresse. Par habitude."
+            ),
+            (
+                f"Le travailleur pensait exactement comme toi ce matin-là. "
+                f"Que ça arriverait pas. Que c'était juste une tâche de routine. "
+                f"[silence 2s] "
+                f"Combien de fois t'as pensé la même chose cette semaine?"
+            ),
+        ]
+
+        # --- ENJEUX ---
+        enjeux_variants = [
+            (
+                f"La CNESST rapporte que dans le secteur {secteur}, "
+                f"les lésions de type {nature.lower()} arrivent chaque année. "
+                f"Coût moyen d'un accident grave : plus de 40 000$ pour l'employeur. "
+                f"Mais le vrai coût? [silence 2s] "
+                f"C'est la famille qui reçoit un appel qu'elle espérait jamais recevoir."
+            ),
+            (
+                f"Après l'accident, l'équipe a travaillé six mois avec un trou. "
+                f"Le remplaçant avait peur de toucher à {agent}. "
+                f"Le moral était à terre. [silence 2s] "
+                f"Un accident, c'est jamais juste une personne. C'est toute l'équipe."
+            ),
+            (
+                f"La CNESST a émis un constat d'infraction. "
+                f"L'amende : entre 17 000$ et 70 000$ pour {nature.lower()} évitable. "
+                f"[silence 2s] Mais le pire, c'est pas l'amende. "
+                f"C'est le collègue qui rentre pas le lendemain."
+            ),
+        ]
+
+        # --- BOUCLE ---
+        boucle_variants = [
+            (
+                f"Qu'est-ce qui aurait changé? Une chose. [silence 2s] "
+                f"{action1}. "
+                f"C'est tout. Trente secondes. "
+                f"Trente secondes pour que {travailleur} rentre chez {lui_elle} ce soir-là."
+            ),
+            (
+                f"Rembobine. Même matin. Même {lieu}. Même {vocab['pause']}. "
+                f"Sauf que cette fois-là, quelqu'un prend 30 secondes pour "
+                f"{action1.lower()}. "
+                f"[silence 2s] Le reste de la journée se passe normalement. "
+                f"Comme d'habitude."
+            ),
+            (
+                f"Après l'accident, l'entreprise a instauré une règle : "
+                f"{action1.lower()} à chaque début de quart. "
+                f"Zéro incident de ce type depuis. [silence 2s] "
+                f"La question c'est : pourquoi ça a pris un accident pour le faire?"
+            ),
+        ]
+
+        # --- DÉCISION ---
+        decision_variants = [
+            (
+                f"Ce matin, avant de commencer ta journée : "
+                f"tu prends 30 secondes pour vérifier, ou tu les prends pas? "
+                f"[silence 3s] C'est tout."
+            ),
+            (
+                f"La question c'est pas si ça peut arriver. "
+                f"C'est quand. [silence 2s] "
+                f"Aujourd'hui, c'est toi qui décides."
+            ),
+            (
+                f"T'as le choix. 30 secondes de vérification maintenant. "
+                f"[silence 2s] Ou les 30 secondes qui changent tout. "
+                f"C'est dans tes mains."
+            ),
+        ]
+
+        sections = [
+            {"principe": "tension", "timing": "0:00-0:45",
+             "texte": random.choice(tension_variants),
+             "note_animateur": "Parle lentement. Laisse le silence faire son travail."},
+            {"principe": "humain", "timing": "0:45-1:30",
+             "texte": random.choice(humain_variants),
+             "note_animateur": "Regarde les gens dans les yeux. Fais une pause."},
+            {"principe": "image", "timing": "1:30-2:15",
+             "texte": random.choice(image_variants),
+             "note_animateur": "Décris lentement comme si tu racontais un film."},
+            {"principe": "pour_toi", "timing": "2:15-3:15",
+             "texte": random.choice(pour_toi_variants),
+             "note_animateur": "Interpelle-les directement. Laisse-les réfléchir."},
+            {"principe": "enjeux", "timing": "3:15-4:00",
+             "texte": random.choice(enjeux_variants),
+             "note_animateur": "Cite les chiffres calmement. Le silence après est plus fort."},
+            {"principe": "boucle", "timing": "4:00-4:45",
+             "texte": random.choice(boucle_variants),
+             "note_animateur": "Reviens au calme du début. La boucle se ferme."},
+            {"principe": "decision", "timing": "4:45-5:00",
+             "texte": random.choice(decision_variants),
+             "note_animateur": "Termine là. Pas de sermon. La question suffit."},
+        ]
+
+        # Ajouter épilogue IA si mode ia_sst
         if mode == "ia_sst" and angle_ia:
+            epilogue_variants = [
+                (
+                    f"Et si je vous disais qu'une technologie existe aujourd'hui "
+                    f"qui aurait pu changer cette histoire? [silence 2s] "
+                    f"{angle_ia} "
+                    f"C'est pas de la science-fiction. C'est disponible maintenant."
+                ),
+                (
+                    f"Y'a quelque chose que je veux vous montrer. [silence 2s] "
+                    f"{angle_ia} "
+                    f"Ça coûte moins cher qu'un seul jour d'arrêt de travail."
+                ),
+                (
+                    f"On parle souvent de prévention. "
+                    f"Mais la prévention en 2024, c'est aussi ça : [silence 2s] "
+                    f"{angle_ia} "
+                    f"La question c'est : est-ce qu'on peut se permettre de pas le savoir?"
+                ),
+            ]
             sections.insert(6, {
                 "principe": "epilogue_ia",
                 "timing": "4:45-5:30",
-                "texte": (
-                    f"Et si je vous disais qu'une technologie existe aujourd'hui qui aurait pu "
-                    f"changer cette histoire? [silence 2s] "
-                    f"{angle_ia} "
-                    f"C'est pas de la science-fiction. C'est disponible maintenant. "
-                    f"La question c'est : est-ce qu'on peut se permettre de pas le savoir?"
-                ),
-                "note_animateur": "C'est le moment pedagogique IA. Sois factuel, pas vendeur.",
+                "texte": random.choice(epilogue_variants),
+                "note_animateur": "C'est le moment pédagogique IA. Sois factuel, pas vendeur.",
             })
-            # Ajuster timing decision
             sections[-1]["timing"] = "5:30-5:45"
 
+        titre = random.choice([
+            f"Les 30 secondes qui changent tout — {nature} en {secteur}",
+            f"Ce matin-là, en {secteur}",
+            f"{nature} — Une histoire qui aurait pu être la tienne",
+            f"Quand {agent} devient l'ennemi — {secteur}",
+        ])
+
+        lecon = synthese.get("lecon_principale", f"Un accident évitable lié à {agent}")
+
         return {
-            "titre": f"Les 30 secondes qui changent tout — {nature} en {secteur}",
+            "titre": titre,
             "duree_estimee_minutes": duree,
             "sections": sections,
             "source_incident": incident.get("id", "UNKNOWN"),
             "secteur": secteur,
             "risque_principal": lecon[:80],
-            "reflexe_du_jour": actions[0] if actions else "Prendre 30 secondes avant de commencer",
+            "reflexe_du_jour": action1,
             "references_reglementaires": refs,
         }
 
