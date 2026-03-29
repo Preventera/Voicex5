@@ -3,7 +3,7 @@ SafeTalkX5 — Moteur d'analyse d'accident (4 methodes)
 =======================================================
 Analyse chaque incident avec 4 methodes reconnues en SST/HSE
 avant de generer le storytelling. Fonctionne en mode Claude (riche)
-ou en mode regles (gratuit, sans API).
+ou en mode règles (gratuit, sans API).
 
 Methodes :
 1. ADC — Arbre des Causes (INRS/CNESST)
@@ -23,7 +23,7 @@ from typing import Any, Optional
 logger = logging.getLogger("safetalkx5.analysis")
 
 # ============================================================
-# Regles deterministes par agent causal
+# Règles déterministes par agent causal
 # ============================================================
 AGENT_CAUSAL_RULES: dict[str, dict[str, Any]] = {
     "echelle": {
@@ -85,7 +85,7 @@ AGENT_CAUSAL_RULES: dict[str, dict[str, Any]] = {
 }
 
 # ============================================================
-# Regles par nature de lesion
+# Règles par nature de lesion
 # ============================================================
 NATURE_LESION_RULES: dict[str, dict[str, str]] = {
     "fracture": {
@@ -141,7 +141,7 @@ NATURE_LESION_RULES: dict[str, dict[str, str]] = {
 }
 
 # ============================================================
-# Regles par indicateur
+# Règles par indicateur
 # ============================================================
 INDICATOR_FACTORS: dict[str, dict[str, Any]] = {
     "tms": {
@@ -175,7 +175,7 @@ class AnalysisEngine:
     """Analyse un incident SST avec 4 methodes en parallele.
 
     Mode Claude : analyse riche via API Anthropic.
-    Mode regles : analyse deterministe sans LLM (gratuit).
+    Mode règles : analyse déterministe sans LLM (gratuit).
     """
 
     def __init__(self, anthropic_api_key: Optional[str] = None) -> None:
@@ -188,13 +188,13 @@ class AnalysisEngine:
                 import anthropic
                 self._client = anthropic.Anthropic(api_key=api_key)
                 self._mode = "claude"
-                logger.info("AnalysisEngine initialise — mode Claude (API disponible)")
+                logger.info("AnalysisEngine initialisé — mode Claude (API disponible)")
             except ImportError:
-                logger.warning("Module anthropic non installe — mode regles")
+                logger.warning("Module anthropic non installé — mode règles")
             except Exception as exc:
-                logger.warning("Erreur init Anthropic: %s — mode regles", exc)
+                logger.warning("Erreur init Anthropic: %s — mode règles", exc)
         else:
-            logger.info("AnalysisEngine initialise — mode regles (pas de cle API)")
+            logger.info("AnalysisEngine initialisé — mode règles (pas de clé API)")
 
     @property
     def mode(self) -> str:
@@ -490,7 +490,7 @@ Reponds UNIQUEMENT en JSON :
             raw = response.content[0].text.strip()
             return self._parse_json(raw, method_name)
         except Exception as exc:
-            logger.warning("Erreur Claude (%s): %s — fallback regles", method_name, exc)
+            logger.warning("Erreur Claude (%s): %s — fallback règles", method_name, exc)
             return {}
 
     def _parse_json(self, text: str, method_name: str) -> dict:
@@ -510,7 +510,7 @@ Reponds UNIQUEMENT en JSON :
     # ----------------------------------------------------------
 
     def _match_agent_rules(self, agent: str) -> dict:
-        """Trouve les regles correspondant a l'agent causal."""
+        """Trouve les règles correspondant a l'agent causal."""
         agent_lower = agent.lower()
         for key, rules in AGENT_CAUSAL_RULES.items():
             if key in agent_lower:
@@ -518,7 +518,7 @@ Reponds UNIQUEMENT en JSON :
         return {}
 
     def _match_nature_rules(self, nature: str) -> dict:
-        """Trouve les regles correspondant a la nature de lesion."""
+        """Trouve les règles correspondant a la nature de lesion."""
         nature_lower = nature.lower()
         for key, rules in NATURE_LESION_RULES.items():
             if key in nature_lower:

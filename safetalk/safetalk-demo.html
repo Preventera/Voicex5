@@ -262,7 +262,7 @@
       { id: 2, nom: "L'histoire", icon: "\u{1F4D6}", duree: "5 min" },
       { id: 3, nom: "Enjeux", icon: "\u26A0\uFE0F", duree: "3 min" },
       { id: 4, nom: "Actions", icon: "\u2705", duree: "3 min" },
-      { id: 5, nom: "Cl\u00F4ture", icon: "\u{1F3C1}", duree: "2 min" },
+      { id: 5, nom: "Clôture", icon: "\u{1F3C1}", duree: "2 min" },
     ];
 
     const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
@@ -350,18 +350,18 @@
               }
               if (msg.type === "turn_complete") {
                 setIsGeminiSpeaking(false);
-                setTranscripts(prev => [...prev, { role: 'participant', text: '(\u00E9coute...)' }]);
+                setTranscripts(prev => [...prev, { role: 'participant', text: '(écoute...)' }]);
               }
               if (msg.type === "error") { setError(msg.message); }
             } catch(e) {}
           };
 
-          ws.onerror = () => setError("Erreur WebSocket. V\u00E9rifiez que le serveur tourne.");
+          ws.onerror = () => setError("Erreur WebSocket. Vérifiez que le serveur tourne.");
           ws.onclose = () => setSessionStarted(false);
           setSessionStarted(true);
 
         } catch(err) {
-          if (err.name === 'NotAllowedError') setError("Acc\u00E8s au microphone refus\u00E9.");
+          if (err.name === 'NotAllowedError') setError("Accès au microphone refusé.");
           else setError("Erreur: " + err.message);
         }
       };
@@ -415,7 +415,7 @@
             <div className="text-center my-8">
               <button onClick={handleStart}
                 className="py-4 px-8 rounded-2xl bg-st-accent text-white font-bold text-lg hover:bg-orange-600 transition pulse-accent flex items-center justify-center gap-3 mx-auto">
-                <span className="text-2xl">{"\uD83C\uDFA4"}</span> D\u00E9marrer la causerie live
+                <span className="text-2xl">{"\uD83C\uDFA4"}</span> Démarrer la causerie live
               </button>
               <p className="text-xs text-slate-500 mt-3">Microphone requis — Gemini anime la causerie</p>
               {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
@@ -434,7 +434,7 @@
                 </div>
               </div>
               <p className="text-center text-sm mb-3 font-medium" style={{color: isGeminiSpeaking ? '#f97316' : '#22c55e'}}>
-                {isGeminiSpeaking ? "L'animateur parle..." : "\u00C0 vous de r\u00E9pondre..."}
+                {isGeminiSpeaking ? "L'animateur parle..." : "À vous de répondre..."}
               </p>
 
               {/* Transcript */}
@@ -480,13 +480,13 @@
         <div className="space-y-4 pb-8">
           {talk.reflexe_du_jour && (
             <div className="bg-st-accent/10 border border-st-accent/30 rounded-xl p-4 text-center">
-              <p className="text-xs text-st-accent uppercase tracking-wider mb-1">R\u00E9flexe du jour</p>
+              <p className="text-xs text-st-accent uppercase tracking-wider mb-1">Réflexe du jour</p>
               <p className="text-lg font-bold text-st-accent">{talk.reflexe_du_jour}</p>
             </div>
           )}
           {talk.references_reglementaires?.length > 0 && (
             <div className="bg-st-card rounded-xl border border-gray-800 p-4">
-              <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">R\u00E9f\u00E9rences r\u00E9glementaires</p>
+              <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Références réglementaires</p>
               <ul className="space-y-1">
                 {talk.references_reglementaires.map((r,i) => (
                   <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
@@ -497,8 +497,8 @@
             </div>
           )}
           <div className="flex items-center justify-between text-xs text-slate-600 px-1">
-            <span>Source : {talk.source_incident || "anonymis\u00E9"}</span>
-            {talk.generation_time_s && <span>G\u00E9n\u00E9r\u00E9 en {talk.generation_time_s}s</span>}
+            <span>Source : {talk.source_incident || "anonymisé"}</span>
+            {talk.generation_time_s && <span>Généré en {talk.generation_time_s}s</span>}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={onCopy}
