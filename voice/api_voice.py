@@ -214,9 +214,10 @@ async def ws_safetalk_live(websocket: WebSocket):
         incident = talk.get("incident", {})
         analysis_summary = talk.get("analysis_summary", {})
         analysis = {"synthese": analysis_summary, "adc": {}, "bowtie": {}}
+        prevention_oral = talk.get("prevention", {}).get("oral")
 
-        # Créer session Gemini Live avec prompt causerie
-        session = SafeTalkLiveSession(incident, analysis)
+        # Créer session Gemini Live avec prompt causerie v4
+        session = SafeTalkLiveSession(incident, analysis, prevention_oral)
         session_id = await session.start()
 
         await websocket.send_json({
