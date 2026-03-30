@@ -18,6 +18,8 @@ import random
 import re
 from typing import Optional
 
+from safetalk.prevention_data import PreventionData
+
 logger = logging.getLogger("safetalkx5.generator")
 
 # ============================================================
@@ -313,42 +315,58 @@ class SafeTalkGenerator:
         analysis: dict,
         config: Optional[dict] = None,
     ) -> dict:
-        """Genere une causerie SST complete.
+        """Génère une causerie SST v4 en 6 phases.
 
         Args:
             incident: Profil d'incident (depuis CNESSTParser ou OSHAScraper).
-            analysis: Resultat d'AnalysisEngine.analyze_incident().
-            config: {mode, duree_minutes, langue, role_animateur}.
+            analysis: Résultat d'AnalysisEngine.analyze_incident().
+            config: {mode, duree_minutes, langue, role_animateur, risk_type}.
 
         Returns:
-            Talk structure avec titre, sections, refs, reflexe du jour.
+            Talk structuré avec phases, incident, prevention, refs.
         """
         config = config or {}
         mode = config.get("mode", "sst_pur")
-        duree = config.get("duree_minutes", 5)
+        duree = config.get("duree_minutes", 15)
         langue = config.get("langue", "fr")
         role = config.get("role_animateur", "superviseur")
 
-        if self._mode == "claude" and self._client:
-            talk = await self._generate_claude(incident, analysis, mode, duree, role)
-        else:
-            talk = self._template_fallback(incident, analysis, config)
+        sector = str(incident.get("secteur_scian", ""))
+        risk_type = config.get("risk_type", "")
 
-        # Traduction si demandee
+        # Charger les données de prévention
+        prevention = PreventionData()
+        prev_data = prevention.get_prevention(sector, risk_type)
+        oral = prev_data.get("oral", {})
+        pdf = prev_data.get("pdf", {})
+
+        # Générer le talk (Claude ou template)
+        if self._mode == "claude" and self._client:
+            talk = await self._generate_claude_v4(incident, analysis, oral, mode, duree, role)
+        else:
+            talk = self._template_fallback_v4(incident, analysis, oral, mode)
+
+        # Traduction si demandée
         if langue == "en":
             talk = await self.translate_to_english(talk)
 
-        # Nettoyer les tags de section et balisage du texte narré
+        # Nettoyer les tags sur TOUS les champs texte
         for section in talk.get("sections", []):
             if "texte" in section:
                 section["texte"] = self._clean_narration_text(section["texte"])
+            if "contenu" in section:
+                section["contenu"] = self._clean_narration_text(section["contenu"])
 
+        # Assembler le résultat final
         talk["config"] = {"mode": mode, "duree_minutes": duree, "langue": langue, "role_animateur": role}
         talk["mode_generation"] = self._mode
+        talk["prevention"] = prev_data
+        talk["sector"] = sector
+        talk["risk_type"] = risk_type
 
         logger.info(
-            "Causerie generee — titre='%s' mode=%s duree=%dmin sections=%d",
-            talk.get("titre", "?")[:50], mode, duree, len(talk.get("sections", [])),
+            "Causerie v4 générée — titre='%s' mode=%s phases=%d",
+            talk.get("titre", "?")[:50], mode, len(talk.get("sections", [])),
         )
         return talk
 
@@ -421,7 +439,203 @@ class SafeTalkGenerator:
             return self._template_fallback(incident, analysis, {"mode": mode, "duree_minutes": duree, "role_animateur": role})
 
     # ----------------------------------------------------------
-    # Template fallback (sans API)
+    # V4 — Génération 6 phases (Claude)
+    # ----------------------------------------------------------
+
+    async def _generate_claude_v4(
+        self, incident: dict, analysis: dict, oral: dict, mode: str, duree: int, role: str,
+    ) -> dict:
+        """Génère une causerie 6 phases via Claude."""
+        synthese = analysis.get("synthese", {})
+        incident_clean = {k: v for k, v in incident.items() if k != "contexte_secteur"}
+
+        prompt = f"""Tu es un expert en animation de causeries SST au Québec.
+Génère une causerie structurée en 6 phases basée sur cet incident et ces données de prévention.
+
+INCIDENT : {json.dumps(incident_clean, ensure_ascii=False, indent=2)}
+ANALYSE : {json.dumps(synthese, ensure_ascii=False, indent=2)}
+OUVERTURE : {oral.get('ouverture_theme', '')}
+QUESTIONS DIALOGUE : {json.dumps(oral.get('questions_dialogue', []), ensure_ascii=False)}
+EXEMPLES RECONNAISSANCE : {json.dumps(oral.get('exemples_reconnaissance', []), ensure_ascii=False)}
+MOYENS PRÉVENTION : {json.dumps(oral.get('moyens_prevention', []), ensure_ascii=False)}
+RÉFLEXE DU JOUR : {oral.get('reflexe_du_jour', '')}
+MODE : {mode}
+
+Réponds UNIQUEMENT en JSON avec cette structure :
+{{
+  "titre": "titre accrocheur",
+  "duree_estimee_minutes": {duree},
+  "sections": [
+    {{"phase": 1, "nom": "Ouverture", "duree": "1-2 min", "principe": "ouverture", "texte": "...", "contenu": "..."}},
+    {{"phase": 2, "nom": "Retour d'expérience", "duree": "3-4 min", "principe": "histoire", "texte": "...", "contenu": "..."}},
+    {{"phase": 3, "nom": "Dialogue participatif", "duree": "4-5 min", "principe": "dialogue", "texte": "...", "contenu": "...", "questions": [...]}},
+    {{"phase": 4, "nom": "Reconnaissance", "duree": "2 min", "principe": "reconnaissance", "texte": "...", "contenu": "...", "exemples": [...]}},
+    {{"phase": 5, "nom": "Actions & Retour", "duree": "2-3 min", "principe": "actions", "texte": "...", "contenu": "...", "moyens": [...]}},
+    {{"phase": 6, "nom": "Clôture", "duree": "1 min", "principe": "cloture", "texte": "...", "contenu": "...", "reflexe": "..."}}
+  ],
+  "source_incident": "{incident.get('id', 'UNKNOWN')}",
+  "secteur": "{incident.get('secteur_nom', '')}",
+  "reflexe_du_jour": "{oral.get('reflexe_du_jour', '')}"
+}}
+
+STYLE : Français québécois terrain, tutoiement, phrases courtes, ton positif et participatif.
+Les champs "texte" et "contenu" sont identiques — le texte narrable en français naturel."""
+
+        try:
+            response = self._client.messages.create(
+                model="claude-sonnet-4-6-20250514",
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip()
+            return self._parse_json(raw)
+        except Exception as exc:
+            logger.warning("Erreur Claude v4: %s — fallback template v4", exc)
+            return self._template_fallback_v4(incident, analysis, oral, mode)
+
+    # ----------------------------------------------------------
+    # V4 — Template fallback 6 phases (sans API)
+    # ----------------------------------------------------------
+
+    def _template_fallback_v4(self, incident: dict, analysis: dict, oral: dict, mode: str) -> dict:
+        """Génère une causerie 6 phases sans API Claude."""
+        synthese = analysis.get("synthese", {})
+        nature = incident.get("nature_lesion", "Blessure")
+        agent = incident.get("agent_causal", "un équipement")
+        secteur = incident.get("secteur_nom", "le milieu de travail")
+        age = incident.get("groupe_age", "35-44")
+        sexe = incident.get("sexe", "")
+        annee = incident.get("annee", 2023)
+        genre = incident.get("genre_accident", "")
+
+        is_m = sexe.lower().startswith("m") if sexe else True
+        pronom = "il" if is_m else "elle"
+        lui_elle = "lui" if is_m else "elle"
+        travailleur = "un travailleur" if is_m else "une travailleuse"
+
+        actions = synthese.get("actions_cles", oral.get("moyens_prevention", ["Vérifier l'équipement"]))
+        action1 = actions[0] if actions else "une vérification de 30 secondes"
+        angle_ia = synthese.get("angle_ia", "")
+        ouverture = oral.get("ouverture_theme", f"Aujourd'hui, on fait le point sur la sécurité en lien avec {agent}.")
+        questions = oral.get("questions_dialogue", ["Comment ça se passe chez nous?", "Qu'est-ce qui fonctionne bien?"])
+        exemples = oral.get("exemples_reconnaissance", ["Quelqu'un qui a signalé un danger potentiel"])
+        moyens = oral.get("moyens_prevention", [action1])
+        reflexe = oral.get("reflexe_du_jour", f"Avant de commencer, je vérifie {agent}.")
+        ressource = oral.get("ressource_reference", "Votre préventionniste")
+        refs = _get_refs(incident)
+
+        # Vocabulaire sectoriel
+        vocab = SECTOR_VOCABULARY_DEFAULT.copy()
+        secteur_code = str(incident.get("secteur_scian", ""))
+        for prefix_len in [4, 3, 2]:
+            prefix = secteur_code[:prefix_len]
+            if prefix in SECTOR_VOCABULARY:
+                vocab = SECTOR_VOCABULARY[prefix]
+                break
+
+        lieu = vocab["lieu"]
+        ambiance = vocab["ambiance"]
+        collegues = vocab["collegue"]
+
+        # --- PHASE 1 : OUVERTURE ---
+        phase1 = ouverture
+
+        # --- PHASE 2 : RETOUR D'EXPÉRIENCE ---
+        phase2_variants = [
+            (
+                f"Laissez-moi vous raconter ce qui est arrivé. {annee}, en {secteur}. "
+                f"{travailleur.title()}, {age} ans. Ça fait des années qu'{pronom} travaille "
+                f"dans le domaine. {pronom.title()} connaît la job. "
+                f"Ce jour-là, {pronom} travaillait avec {agent}. "
+                f"{genre if genre else 'La tâche semblait routinière'}. "
+                f"Le {lieu}, {ambiance}. Tout est normal. "
+                f"Pis là, {nature.lower()}. "
+                f"Les conséquences : {synthese.get('lecon_principale', 'un accident évitable')}."
+            ),
+            (
+                f"Je vais vous raconter un cas réel. {secteur}, {annee}. "
+                f"Quelqu'un comme vous autres. {age} ans, de l'expérience, fiable. "
+                f"Ce matin-là, {pronom} arrive au {lieu}. {ambiance}. "
+                f"La tâche : {genre if genre else 'une intervention avec ' + agent}. "
+                f"Rien de spécial, {pronom} l'a fait cent fois. "
+                f"Sauf que cette fois-là, {nature.lower()}. "
+                f"{pronom.title()} a pas pu rentrer chez {lui_elle} ce soir-là."
+            ),
+        ]
+
+        # --- PHASE 3 : DIALOGUE ---
+        phase3 = (
+            "Maintenant, j'aimerais qu'on en parle ensemble. "
+            + " ".join(f"{q}" for q in questions[:3])
+        )
+
+        # --- PHASE 4 : RECONNAISSANCE ---
+        exemples_text = " ".join(
+            f"On reconnaît {ex.lower()}. C'est ça qui contribue à notre sécurité."
+            for ex in exemples[:2]
+        )
+        phase4 = (
+            f"Avant de parler des actions, je veux souligner ce qui va bien dans notre équipe. "
+            f"{exemples_text}"
+        )
+
+        # --- PHASE 5 : ACTIONS ---
+        moyens_text = " ".join(f"- {m}." for m in moyens[:3])
+        phase5 = (
+            f"Concrètement, voici ce qu'on peut faire : {moyens_text} "
+            f"Qui ici prend la responsabilité de {action1.lower()} cette semaine?"
+        )
+        if mode == "ia_sst" and angle_ia:
+            phase5 += f" Et pour aller plus loin : {angle_ia}"
+
+        # --- PHASE 6 : CLÔTURE ---
+        phase6 = (
+            f"Le réflexe du jour : {reflexe} "
+            f"Est-ce que quelqu'un a encore une inquiétude ou une question? "
+            f"Si vous avez besoin, la ressource de référence c'est : {ressource}. "
+            f"Merci de votre attention. Bonne journée sécuritaire à tous."
+        )
+
+        titre = random.choice([
+            f"Causerie sécurité — {nature} en {secteur}",
+            f"{ouverture[:60]}",
+            f"Ce qu'on peut apprendre de cet incident — {secteur}",
+        ])
+
+        sections = [
+            {"phase": 1, "nom": "Ouverture", "duree": "1-2 min", "principe": "ouverture",
+             "texte": phase1, "contenu": phase1,
+             "note_animateur": "Ton positif, lien avec le travail du jour."},
+            {"phase": 2, "nom": "Retour d'expérience", "duree": "3-4 min", "principe": "histoire",
+             "texte": random.choice(phase2_variants), "contenu": random.choice(phase2_variants),
+             "note_animateur": "Raconte comme une histoire, pas un rapport."},
+            {"phase": 3, "nom": "Dialogue participatif", "duree": "4-5 min", "principe": "dialogue",
+             "texte": phase3, "contenu": phase3, "questions": questions,
+             "note_animateur": "Écoute, reformule, pas de jugement."},
+            {"phase": 4, "nom": "Reconnaissance", "duree": "2 min", "principe": "reconnaissance",
+             "texte": phase4, "contenu": phase4, "exemples": exemples,
+             "note_animateur": "Nomme des comportements positifs réels."},
+            {"phase": 5, "nom": "Actions & Retour", "duree": "2-3 min", "principe": "actions",
+             "texte": phase5, "contenu": phase5, "moyens": moyens,
+             "note_animateur": "Concret, vérifiable, engagement de groupe."},
+            {"phase": 6, "nom": "Clôture", "duree": "1 min", "principe": "cloture",
+             "texte": phase6, "contenu": phase6, "reflexe": reflexe,
+             "note_animateur": "Terminer sur une note positive."},
+        ]
+
+        return {
+            "titre": titre,
+            "duree_estimee_minutes": 15,
+            "sections": sections,
+            "source_incident": incident.get("id", "UNKNOWN"),
+            "secteur": secteur,
+            "risque_principal": synthese.get("lecon_principale", nature)[:80],
+            "reflexe_du_jour": reflexe,
+            "references_reglementaires": refs,
+        }
+
+    # ----------------------------------------------------------
+    # LEGACY — Template fallback 7 principes (v3)
     # ----------------------------------------------------------
 
     def _template_fallback(self, incident: dict, analysis: dict, config: dict) -> dict:
