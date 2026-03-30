@@ -256,13 +256,14 @@
       }
     }
 
-    // Phase definitions
+    // Phase definitions v4 (6 phases)
     const PHASES = [
-      { id: 1, nom: "Accroche", icon: "\u{1F3AF}", duree: "2 min" },
-      { id: 2, nom: "L'histoire", icon: "\u{1F4D6}", duree: "5 min" },
-      { id: 3, nom: "Enjeux", icon: "\u26A0\uFE0F", duree: "3 min" },
-      { id: 4, nom: "Actions", icon: "\u2705", duree: "3 min" },
-      { id: 5, nom: "Clôture", icon: "\u{1F3C1}", duree: "2 min" },
+      { id: 1, nom: "Ouverture", icon: "\u{1F3AF}", duree: "1-2 min" },
+      { id: 2, nom: "Exp\u00E9rience", icon: "\u{1F4D6}", duree: "3-4 min" },
+      { id: 3, nom: "Dialogue", icon: "\u{1F4AC}", duree: "4-5 min" },
+      { id: 4, nom: "Reconnaissance", icon: "\u2B50", duree: "2 min" },
+      { id: 5, nom: "Actions", icon: "\u2705", duree: "2-3 min" },
+      { id: 6, nom: "Cl\u00F4ture", icon: "\u{1F465}", duree: "1 min" },
     ];
 
     const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
@@ -294,13 +295,14 @@
         }
       }, [sessionStarted]);
 
-      // Phase estimation by elapsed time
+      // Phase estimation by elapsed time (6 phases, ~15 min total)
       useEffect(() => {
-        if (elapsed < 120) setCurrentPhase(0);
-        else if (elapsed < 420) setCurrentPhase(1);
-        else if (elapsed < 600) setCurrentPhase(2);
-        else if (elapsed < 780) setCurrentPhase(3);
-        else setCurrentPhase(4);
+        if (elapsed < 120) setCurrentPhase(0);       // Phase 1: Ouverture (0-2 min)
+        else if (elapsed < 360) setCurrentPhase(1);  // Phase 2: Expérience (2-6 min)
+        else if (elapsed < 660) setCurrentPhase(2);  // Phase 3: Dialogue (6-11 min)
+        else if (elapsed < 780) setCurrentPhase(3);  // Phase 4: Reconnaissance (11-13 min)
+        else if (elapsed < 900) setCurrentPhase(4);  // Phase 5: Actions (13-15 min)
+        else setCurrentPhase(5);                     // Phase 6: Clôture (15+ min)
       }, [elapsed]);
 
       const cleanup = useCallback(() => {
@@ -402,12 +404,12 @@
                   i === currentPhase ? "bg-st-accent text-white ring-2 ring-st-accent/40" :
                   i < currentPhase ? "bg-green-600/30 text-green-400" : "bg-st-surface text-slate-600"
                 }`}>{p.icon}</div>
-                {i < 4 && <div className={`w-6 h-0.5 ${i < currentPhase ? "bg-green-600" : "bg-gray-700"}`}/>}
+                {i < 5 && <div className={`w-4 h-0.5 ${i < currentPhase ? "bg-green-600" : "bg-gray-700"}`}/>}
               </div>
             ))}
           </div>
           <p className="text-center text-xs text-slate-500 mb-4">
-            Phase {currentPhase + 1}/5 — {PHASES[currentPhase]?.nom} ({PHASES[currentPhase]?.duree})
+            Phase {currentPhase + 1}/6 — {PHASES[currentPhase]?.nom} ({PHASES[currentPhase]?.duree})
           </p>
 
           {/* Start button or mic indicator */}
@@ -476,19 +478,49 @@
     // SUMMARY SECTION
     // ============================================================
     function SummarySection({ talk, onRestart, onCopy }) {
+      const prev = talk.prevention || {};
+      const pdf = prev.pdf || {};
+      const normes = pdf.normes_csa || [];
+      const articles = pdf.articles_rsst || [];
+      const guides = pdf.guides_asp || [];
+      const allRefs = [...normes, ...articles, ...guides, ...(talk.references_reglementaires || [])];
+      const uniqueRefs = [...new Set(allRefs)];
+
       return (
         <div className="space-y-4 pb-8">
+          {/* Réflexe du jour */}
           {talk.reflexe_du_jour && (
             <div className="bg-st-accent/10 border border-st-accent/30 rounded-xl p-4 text-center">
               <p className="text-xs text-st-accent uppercase tracking-wider mb-1">Réflexe du jour</p>
               <p className="text-lg font-bold text-st-accent">{talk.reflexe_du_jour}</p>
             </div>
           )}
-          {talk.references_reglementaires?.length > 0 && (
+
+          {/* Phases résumé */}
+          {talk.sections?.length > 0 && (
+            <div className="bg-st-card rounded-xl border border-gray-800 p-4">
+              <p className="text-xs text-slate-500 uppercase tracking-wider mb-3">Résumé des 6 phases</p>
+              <div className="space-y-2">
+                {talk.sections.map((s, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-xs font-mono text-st-accent mt-0.5">{s.phase || i+1}</span>
+                    <div>
+                      <span className="text-xs font-semibold text-slate-300">{s.nom || s.principe}</span>
+                      <span className="text-xs text-slate-600 ml-2">({s.duree})</span>
+                      {s.reflexe && <p className="text-xs text-st-accent mt-0.5">{s.reflexe}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Références réglementaires (données prévention PDF) */}
+          {uniqueRefs.length > 0 && (
             <div className="bg-st-card rounded-xl border border-gray-800 p-4">
               <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Références réglementaires</p>
               <ul className="space-y-1">
-                {talk.references_reglementaires.map((r,i) => (
+                {uniqueRefs.map((r,i) => (
                   <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
                     <span className="text-slate-600 mt-0.5">{"\u00A7"}</span> {r}
                   </li>
@@ -496,18 +528,26 @@
               </ul>
             </div>
           )}
+
+          {/* Source + timing */}
           <div className="flex items-center justify-between text-xs text-slate-600 px-1">
             <span>Source : {talk.source_incident || "anonymisé"}</span>
             {talk.generation_time_s && <span>Généré en {talk.generation_time_s}s</span>}
           </div>
-          <div className="grid grid-cols-2 gap-2">
+
+          {/* Actions */}
+          <div className="grid grid-cols-3 gap-2">
             <button onClick={onCopy}
               className="py-2.5 rounded-xl border border-gray-700 text-slate-400 hover:bg-st-surface transition text-sm flex items-center justify-center gap-1">
-              {"\uD83D\uDCCB"} Copier le texte
+              {"\uD83D\uDCCB"} Copier
+            </button>
+            <button disabled
+              className="py-2.5 rounded-xl border border-gray-800 text-slate-600 cursor-not-allowed transition text-sm flex items-center justify-center gap-1">
+              {"\uD83D\uDCC4"} Fiche PDF
             </button>
             <button onClick={onRestart}
               className="py-2.5 rounded-xl bg-st-accent/10 border border-st-accent/30 text-st-accent hover:bg-st-accent/20 transition text-sm flex items-center justify-center gap-1">
-              {"\uD83D\uDD04"} Nouvelle causerie
+              {"\uD83D\uDD04"} Nouvelle
             </button>
           </div>
         </div>
