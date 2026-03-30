@@ -130,6 +130,7 @@ async def generate_safetalk(body: dict):
         "duree_minutes": duree,
         "langue": langue,
         "role_animateur": role,
+        "risk_type": risk_type or "",
     }
     talk = await _generator.generate(incident, analysis, config)
 

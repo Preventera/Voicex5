@@ -393,6 +393,47 @@ _FALLBACK_PREVENTION: dict = {
 }
 
 
+# Normalisation des risk_types (aliases → clé canonique)
+RISK_ALIASES: dict[str, str] = {
+    "chute": "chute",
+    "chutes": "chute",
+    "chute de hauteur": "chute",
+    "fall": "chute",
+    "falls": "chute",
+    "électrique": "electrique",
+    "electrique": "electrique",
+    "loto": "electrique",
+    "cadenassage": "electrique",
+    "machine": "machine",
+    "machines": "machine",
+    "bruit": "surdite",
+    "surdité": "surdite",
+    "surdite": "surdite",
+    "poussière": "chimique",
+    "poussiere": "chimique",
+    "silice": "chimique",
+    "chimique": "chimique",
+    "manutention": "tms",
+    "tms": "tms",
+    "levage": "tms",
+    "psychosocial": "psy",
+    "psy": "psy",
+    "rps": "psy",
+    "espace clos": "chimique",
+    "espaces clos": "chimique",
+    "epi": "epi",
+    "fatigue": "fatigue",
+    "vehicule": "vehicule",
+    "véhicule": "vehicule",
+}
+
+
+def _normalize_risk(risk_type: str) -> str:
+    """Normalise un risk_type via le mapping d'aliases."""
+    key = risk_type.strip().lower()
+    return RISK_ALIASES.get(key, key)
+
+
 class PreventionData:
     """Base statique de données de prévention par secteur/risque."""
 
@@ -410,7 +451,7 @@ class PreventionData:
             dict avec clés "oral" et "pdf".
         """
         sector = str(sector).strip()
-        risk_type = str(risk_type).strip().lower()
+        risk_type = _normalize_risk(str(risk_type))
 
         # 1. Match exact (sector, risk_type)
         key = (sector, risk_type)
