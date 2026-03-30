@@ -757,6 +757,9 @@ class SafeTalkGenerator:
         text = re.sub(r"\[(?:TENSION|HUMAIN|IMAGE|POUR_TOI|ENJEUX|BOUCLE|DECISION|EPILOGUE_IA)\]\s*", "", text)
         # Supprimer tout tag [MOT_EN_MAJUSCULES] restant
         text = re.sub(r"\[[A-ZÀ-Ü_]{3,}\]\s*", "", text)
+        # Supprimer les [silence Xs] et [silence Xmin]
+        text = re.sub(r"\[silence\s*\d+s?\]", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\[silence\s*\d+min\]", "", text, flags=re.IGNORECASE)
         # Nettoyer les espaces multiples
         text = re.sub(r"  +", " ", text).strip()
         return text

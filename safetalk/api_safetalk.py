@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -139,6 +140,16 @@ async def generate_safetalk(body: dict):
     talk["analysis_summary"] = analysis.get("synthese", {})
     talk["generation_time_s"] = round(time.time() - start_time, 2)
     talk["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Nettoyage de sécurité — supprimer tout tag résiduel avant stockage/retour
+    for section in talk.get("sections", []):
+        if "texte" in section:
+            t = section["texte"]
+            t = re.sub(r"\[(?:TENSION|HUMAIN|IMAGE|POUR_TOI|ENJEUX|BOUCLE|DECISION|EPILOGUE_IA)\]\s*", "", t)
+            t = re.sub(r"\[[A-ZÀ-Ü_]{3,}\]\s*", "", t)
+            t = re.sub(r"\[silence\s*\d+s?\]", "", t, flags=re.IGNORECASE)
+            t = re.sub(r"\[silence\s*\d+min\]", "", t, flags=re.IGNORECASE)
+            section["texte"] = re.sub(r"  +", " ", t).strip()
 
     _generated_talks[talk_id] = talk
     _stats["talks_generated"] += 1
